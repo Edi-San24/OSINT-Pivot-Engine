@@ -5,7 +5,7 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv
+load_dotenv()
 
 # API Keys
 SHODAN_API_KEY = os.getenv("SHODAN_API_KEY", "")
