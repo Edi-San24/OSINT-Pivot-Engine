@@ -22,3 +22,11 @@ sd = ShodanConnector()
 print("Testing Shodan IP lookup...")
 result = sd.query_ip("8.8.8.8")
 print(result)
+
+from connectors.whois import WHOISConnector
+
+ws = WHOISConnector()
+
+print("Testing WHOIS domain lookup...")
+result = ws.query_domain("google.com")
+print(result)
