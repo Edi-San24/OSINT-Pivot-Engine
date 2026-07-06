@@ -14,3 +14,11 @@ print(result)
 print("\nTesting domain lookup...")
 result = vt.query_domain("google.com")
 print(result)
+
+from connectors.shodan import ShodanConnector
+
+sd = ShodanConnector()
+
+print("Testing Shodan IP lookup...")
+result = sd.query_ip("8.8.8.8")
+print(result)
