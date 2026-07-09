@@ -52,3 +52,38 @@ class CensysConnector:
 
         except requests.exceptions.RequestException as e:
             return {"error": str(e), "indicator": ip, "source": "censys"}
+        
+    def query_domain(self, domain: str) -> dict:
+        """
+        Queries Censys for a given domain.
+        Returns host data and services or an error dict.
+        """
+        url = f"{self.BASE_URL}/asset/host/{domain}"
+
+        try:
+            response = requests.get(url, headers=self.headers)
+            response.raise_for_status()
+            data = response.json()
+
+            resource = data.get("result", {}).get("resource", {})
+            services = resource.get("services", [])[:MAX_RESULTS_PER_SOURCE]
+
+            return {
+                "indicator": domain,
+                "type": "domain",
+                "source": "censys",
+                "autonomous_system": resource.get("autonomous_system", {}).get("name", "unknown"),
+                "country": resource.get("location", {}).get("country", "unknown"),
+                "open_ports": [s.get("port") for s in services],
+                "services": [
+                    {
+                        "port": s.get("port", "unknown"),
+                        "service_name": s.get("protocol", "unknown"),
+                        "transport": s.get("transport_protocol", "unknown"),
+                    }
+                    for s in services
+                ]
+            }
+
+        except requests.exceptions.RequestException as e:
+            return {"error": str(e), "indicator": domain, "source": "censys"}
