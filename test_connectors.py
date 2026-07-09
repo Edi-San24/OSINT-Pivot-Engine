@@ -1,32 +1,27 @@
-# Temp test file for validating connectors during build
-# [DELETE BEFORE DEPLOYMENT!!!!]
+import json
+
+def display(label, result):
+    print(f"\n{'='*50}")
+    print(f"  {label}")
+    print(f"{'='*50}")
+    print(json.dumps(result, indent=2))
 
 from connectors.virustotal import VirusTotalConnector
+from connectors.shodan import ShodanConnector
+from connectors.whois import WHOISConnector
+from connectors.passivedns import PassiveDNSConnector
+from connectors.censys import CensysConnector
 
 vt = VirusTotalConnector()
-
-# Test IP lookup
-print("Testing IP lookup...")
-result = vt.query_ip("8.8.8.8")
-print(result)
-
-# Test domain lookup
-print("\nTesting domain lookup...")
-result = vt.query_domain("google.com")
-print(result)
-
-from connectors.shodan import ShodanConnector
-
 sd = ShodanConnector()
-
-print("Testing Shodan IP lookup...")
-result = sd.query_ip("8.8.8.8")
-print(result)
-
-from connectors.whois import WHOISConnector
-
 ws = WHOISConnector()
+pdns = PassiveDNSConnector()
+cs = CensysConnector()
 
-print("Testing WHOIS domain lookup...")
-result = ws.query_domain("google.com")
-print(result)
+display("VirusTotal - IP Lookup", vt.query_ip("8.8.8.8"))
+display("VirusTotal - Domain Lookup", vt.query_domain("google.com"))
+display("Shodan - IP Lookup", sd.query_ip("8.8.8.8"))
+display("WHOIS - Domain Lookup", ws.query_domain("google.com"))
+display("PassiveDNS - Domain Lookup", pdns.query_domain("google.com"))
+display("PassiveDNS - IP Lookup", pdns.query_ip("8.8.8.8"))
+display("Censys - IP Lookup", cs.query_ip("8.8.8.8"))

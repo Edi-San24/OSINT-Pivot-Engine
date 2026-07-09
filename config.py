@@ -10,8 +10,7 @@ load_dotenv()
 # API Keys
 SHODAN_API_KEY = os.getenv("SHODAN_API_KEY", "")
 VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY", "")
-CENSYS_API_ID = os.getenv("CENSYS_API_ID", "")
-CENSYS_API_SECRET = os.getenv("CENSYS_API_SECRET", "")
+CENSYS_API_KEY = os.getenv("CENSYS_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 #Agent settings
