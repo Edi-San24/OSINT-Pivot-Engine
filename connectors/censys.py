@@ -4,6 +4,9 @@
 import requests
 from config import CENSYS_API_KEY, MAX_RESULTS_PER_SOURCE
 
+import logging
+logger = logging.getLogger(__name__)
+
 class CensysConnector:
     """
     Connector for the Censys Platform API.
@@ -87,3 +90,60 @@ class CensysConnector:
 
         except requests.exceptions.RequestException as e:
             return {"error": str(e), "indicator": domain, "source": "censys"}
+        
+    def query_domain_certificates(self, domain: str) -> dict:
+        """
+        Queries crt.sh certificate transparency logs for a domain.
+        Returns TLS certificate data and associated names.
+        Retries once on timeout before giving up.
+        """
+        url = f"https://crt.sh/?q={domain}&output=json"
+
+        for attempt in range(2):
+            try:
+                response = requests.get(url, timeout=45)
+
+                if response.status_code == 404:
+                    return {
+                        "indicator": domain,
+                        "type": "domain",
+                        "source": "crt.sh",
+                        "certificate_count": 0,
+                        "certificates": [],
+                        "note": "No certificate records found."
+                    }
+
+                response.raise_for_status()
+                certs = response.json()[:5]
+
+                return {
+                    "indicator": domain,
+                    "type": "domain",
+                    "source": "crt.sh",
+                    "certificate_count": len(certs),
+                    "certificates": [
+                        {
+                            "issuer": c.get("issuer_name", "unknown"),
+                            "names": c.get("name_value", "unknown"),
+                            "not_before": c.get("not_before", "unknown"),
+                            "not_after": c.get("not_after", "unknown"),
+                        }
+                        for c in certs
+                    ]
+                }
+
+            except requests.exceptions.Timeout:
+                if attempt == 0:
+                    logger.warning(f"crt.sh timeout for {domain}, retrying...")
+                    continue
+                return {
+                    "indicator": domain,
+                    "type": "domain",
+                    "source": "crt.sh",
+                    "certificate_count": 0,
+                    "certificates": [],
+                    "note": "crt.sh timed out after 2 attempts."
+                }
+
+            except requests.exceptions.RequestException as e:
+                return {"error": str(e)[:200], "indicator": domain, "source": "crt.sh"}

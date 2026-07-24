@@ -1,0 +1,1541 @@
+{
+    "type": "bundle",
+    "id": "bundle--b912281d-cbff-4324-91b8-937eccfefff3",
+    "objects": [
+        {
+            "type": "identity",
+            "spec_version": "2.1",
+            "id": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:01:45.593028Z",
+            "modified": "2026-07-24T21:01:45.593028Z",
+            "name": "OSINT Pivot Engine",
+            "description": "Autonomous threat intelligence enrichment system",
+            "identity_class": "system"
+        },
+        {
+            "type": "indicator",
+            "spec_version": "2.1",
+            "id": "indicator--9190816e-28a5-43b2-9f6b-cadce4c3cc1f",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.412871Z",
+            "modified": "2026-07-24T21:02:36.412871Z",
+            "name": "Indicator: db349b97c37d22f5ea1d1841e3c89eb4",
+            "pattern": "[file:hashes.MD5 = 'db349b97c37d22f5ea1d1841e3c89eb4']",
+            "pattern_type": "stix",
+            "pattern_version": "2.1",
+            "valid_from": "2026-07-24T21:02:36Z",
+            "labels": [
+                "malicious-activity"
+            ]
+        },
+        {
+            "type": "malware",
+            "spec_version": "2.1",
+            "id": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.417134Z",
+            "modified": "2026-07-24T21:02:36.417134Z",
+            "name": "trojan.wannacry/wanna",
+            "description": "",
+            "is_family": true
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--0dab8bcd-c0df-46a3-9698-a9c61dffd872",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.417265Z",
+            "modified": "2026-07-24T21:02:36.417265Z",
+            "relationship_type": "indicates",
+            "source_ref": "indicator--9190816e-28a5-43b2-9f6b-cadce4c3cc1f",
+            "target_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--87f03f5e-5972-4069-a813-1d140b350e21",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.417367Z",
+            "modified": "2026-07-24T21:02:36.417367Z",
+            "name": "T1210: Exploitation of Remote Services",
+            "description": "MITRE ATT&CK Technique T1210 \u2014 Tactics: 'lateral-movement'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1210/",
+                    "external_id": "T1210"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--dfb7da61-54b9-4e7c-9b83-7869234836bc",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.417492Z",
+            "modified": "2026-07-24T21:02:36.417492Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--87f03f5e-5972-4069-a813-1d140b350e21"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--7aa1d14e-7826-432d-adc8-511adc2d5187",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.417568Z",
+            "modified": "2026-07-24T21:02:36.417568Z",
+            "name": "T1489: Service Stop",
+            "description": "MITRE ATT&CK Technique T1489 \u2014 Tactics: 'impact'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1489/",
+                    "external_id": "T1489"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--5d57ce28-0a4f-48f9-9667-35d98ed15787",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.417656Z",
+            "modified": "2026-07-24T21:02:36.417656Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--7aa1d14e-7826-432d-adc8-511adc2d5187"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--9174b10d-e92c-4657-971e-ed9debb8069e",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.417725Z",
+            "modified": "2026-07-24T21:02:36.417725Z",
+            "name": "T1083: File and Directory Discovery",
+            "description": "MITRE ATT&CK Technique T1083 \u2014 Tactics: 'discovery'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1083/",
+                    "external_id": "T1083"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--bb298e31-e2f2-456b-8bea-051572f17621",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.417807Z",
+            "modified": "2026-07-24T21:02:36.417807Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--9174b10d-e92c-4657-971e-ed9debb8069e"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--198abb85-0431-4825-8010-5c86e7430fb0",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.417875Z",
+            "modified": "2026-07-24T21:02:36.417875Z",
+            "name": "T1120: Peripheral Device Discovery",
+            "description": "MITRE ATT&CK Technique T1120 \u2014 Tactics: 'discovery'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1120/",
+                    "external_id": "T1120"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--28d79218-faff-48c1-8bb8-6be1541253c1",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.41796Z",
+            "modified": "2026-07-24T21:02:36.41796Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--198abb85-0431-4825-8010-5c86e7430fb0"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--04a1b861-0101-4cf5-867c-edbbea3daf13",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.418027Z",
+            "modified": "2026-07-24T21:02:36.418027Z",
+            "name": "T1486: Data Encrypted for Impact",
+            "description": "MITRE ATT&CK Technique T1486 \u2014 Tactics: 'impact'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1486/",
+                    "external_id": "T1486"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--c5b04eae-a375-4ee4-808e-f023761bc150",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.418107Z",
+            "modified": "2026-07-24T21:02:36.418107Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--04a1b861-0101-4cf5-867c-edbbea3daf13"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--f587b439-f382-4e67-90f0-53a0b2da850f",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.418172Z",
+            "modified": "2026-07-24T21:02:36.418172Z",
+            "name": "T1047: Windows Management Instrumentation",
+            "description": "MITRE ATT&CK Technique T1047 \u2014 Tactics: 'execution'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1047/",
+                    "external_id": "T1047"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--565544f9-338b-4f3a-a107-90e42c2150e4",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.41825Z",
+            "modified": "2026-07-24T21:02:36.41825Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--f587b439-f382-4e67-90f0-53a0b2da850f"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--d0d0380e-2636-4116-aa5a-d995c1414f14",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.418314Z",
+            "modified": "2026-07-24T21:02:36.418314Z",
+            "name": "T1563.002: RDP Hijacking",
+            "description": "MITRE ATT&CK Technique T1563.002 \u2014 Tactics: 'lateral-movement'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1563/002/",
+                    "external_id": "T1563.002"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--a1f94ac2-046e-419b-bd7e-e63f8f7f8546",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.418393Z",
+            "modified": "2026-07-24T21:02:36.418393Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--d0d0380e-2636-4116-aa5a-d995c1414f14"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--b196e786-172c-4fa7-8047-35c7d9bc07e9",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.418458Z",
+            "modified": "2026-07-24T21:02:36.418458Z",
+            "name": "T1490: Inhibit System Recovery",
+            "description": "MITRE ATT&CK Technique T1490 \u2014 Tactics: 'impact'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1490/",
+                    "external_id": "T1490"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--8a29c05c-8d2a-419e-b176-9cffdc014c6b",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.418536Z",
+            "modified": "2026-07-24T21:02:36.418536Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--b196e786-172c-4fa7-8047-35c7d9bc07e9"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--3603b65f-dbdd-4a13-989e-3ee05fbcf6ab",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.418603Z",
+            "modified": "2026-07-24T21:02:36.418603Z",
+            "name": "T1018: Remote System Discovery",
+            "description": "MITRE ATT&CK Technique T1018 \u2014 Tactics: 'discovery'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1018/",
+                    "external_id": "T1018"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--1c0bc09d-9fe3-451d-9721-9b12d60253ef",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.418678Z",
+            "modified": "2026-07-24T21:02:36.418678Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--3603b65f-dbdd-4a13-989e-3ee05fbcf6ab"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--a0f85775-1292-46bd-a47c-bcc5bcde5c24",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.418742Z",
+            "modified": "2026-07-24T21:02:36.418742Z",
+            "name": "T1564.001: Hidden Files and Directories",
+            "description": "MITRE ATT&CK Technique T1564.001 \u2014 Tactics: 'stealth'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1564/001/",
+                    "external_id": "T1564.001"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--92ceb665-a1ea-4726-aa69-4846fd2b45e7",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.418818Z",
+            "modified": "2026-07-24T21:02:36.418818Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--a0f85775-1292-46bd-a47c-bcc5bcde5c24"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--1fe15a16-7505-4099-9262-30b8b9ea98aa",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.418882Z",
+            "modified": "2026-07-24T21:02:36.418882Z",
+            "name": "T1016: System Network Configuration Discovery",
+            "description": "MITRE ATT&CK Technique T1016 \u2014 Tactics: 'discovery'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1016/",
+                    "external_id": "T1016"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--5f88f251-24c0-4ff6-a83e-d057b07b262d",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.41896Z",
+            "modified": "2026-07-24T21:02:36.41896Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--1fe15a16-7505-4099-9262-30b8b9ea98aa"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--588f5694-db35-4739-99cc-ecbdc24b5420",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.419023Z",
+            "modified": "2026-07-24T21:02:36.419023Z",
+            "name": "T1222.001: Windows Permissions",
+            "description": "MITRE ATT&CK Technique T1222.001 \u2014 Tactics: 'defense-impairment'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1222/001/",
+                    "external_id": "T1222.001"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--29bb6633-8c44-40d0-80c6-108c7b2156b3",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.419102Z",
+            "modified": "2026-07-24T21:02:36.419102Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--588f5694-db35-4739-99cc-ecbdc24b5420"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--607799ac-5b89-4ac2-93f9-98f8fe376ff2",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.41917Z",
+            "modified": "2026-07-24T21:02:36.41917Z",
+            "name": "T1090.003: Multi-hop Proxy",
+            "description": "MITRE ATT&CK Technique T1090.003 \u2014 Tactics: 'command-and-control'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1090/003/",
+                    "external_id": "T1090.003"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--a8da7746-b809-4d1a-bc05-f05476a11fab",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.419249Z",
+            "modified": "2026-07-24T21:02:36.419249Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--607799ac-5b89-4ac2-93f9-98f8fe376ff2"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--703bf2b9-9e19-4a82-afde-0513fd00db83",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.419313Z",
+            "modified": "2026-07-24T21:02:36.419313Z",
+            "name": "T1573.002: Asymmetric Cryptography",
+            "description": "MITRE ATT&CK Technique T1573.002 \u2014 Tactics: 'command-and-control'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1573/002/",
+                    "external_id": "T1573.002"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--93059bee-3f5b-42b7-8f23-5f7852a10ad7",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.419394Z",
+            "modified": "2026-07-24T21:02:36.419394Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--703bf2b9-9e19-4a82-afde-0513fd00db83"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--59b318aa-11fc-46a2-9ea1-852486d6b5b3",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.419458Z",
+            "modified": "2026-07-24T21:02:36.419458Z",
+            "name": "T1543.003: Windows Service",
+            "description": "MITRE ATT&CK Technique T1543.003 \u2014 Tactics: 'persistence', 'privilege-escalation'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1543/003/",
+                    "external_id": "T1543.003"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--03240f03-7c59-4768-a759-bd7d39b7b7eb",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.419544Z",
+            "modified": "2026-07-24T21:02:36.419544Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--59b318aa-11fc-46a2-9ea1-852486d6b5b3"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--880793b4-48ab-47da-b77f-df0db49fff5e",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.419609Z",
+            "modified": "2026-07-24T21:02:36.419609Z",
+            "name": "T1570: Lateral Tool Transfer",
+            "description": "MITRE ATT&CK Technique T1570 \u2014 Tactics: 'lateral-movement'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1570/",
+                    "external_id": "T1570"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--91b5f32c-6b69-4c19-acff-7ce73e2fd071",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.419686Z",
+            "modified": "2026-07-24T21:02:36.419686Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a",
+            "target_ref": "attack-pattern--880793b4-48ab-47da-b77f-df0db49fff5e"
+        },
+        {
+            "type": "threat-actor",
+            "spec_version": "2.1",
+            "id": "threat-actor--b6246d38-11ab-4698-94fa-169c731958bc",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.419751Z",
+            "modified": "2026-07-24T21:02:36.419751Z",
+            "name": "Lazarus Group",
+            "description": "",
+            "aliases": [
+                "Lazarus Group",
+                "Labyrinth Chollima",
+                "HIDDEN COBRA",
+                "Guardians of Peace",
+                "ZINC",
+                "NICKEL ACADEMY",
+                "Diamond Sleet"
+            ],
+            "labels": [
+                "nation-state"
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--892546f3-9e9e-45bd-ac57-e8f712fe6ece",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.419848Z",
+            "modified": "2026-07-24T21:02:36.419848Z",
+            "relationship_type": "uses",
+            "source_ref": "threat-actor--b6246d38-11ab-4698-94fa-169c731958bc",
+            "target_ref": "malware--59a22dbf-e8c8-4741-83bf-ed5cda1f9d8a"
+        },
+        {
+            "type": "malware",
+            "spec_version": "2.1",
+            "id": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.419923Z",
+            "modified": "2026-07-24T21:02:36.419923Z",
+            "name": "trojan.wanna/wannacry",
+            "description": "",
+            "is_family": true
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--8f1827ab-8c8c-4beb-8dfe-b99c3e3876bc",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.419997Z",
+            "modified": "2026-07-24T21:02:36.419997Z",
+            "relationship_type": "indicates",
+            "source_ref": "indicator--9190816e-28a5-43b2-9f6b-cadce4c3cc1f",
+            "target_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--5cbe82e2-e4fe-4250-a438-4af5e246cae4",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.420071Z",
+            "modified": "2026-07-24T21:02:36.420071Z",
+            "name": "T1210: Exploitation of Remote Services",
+            "description": "MITRE ATT&CK Technique T1210 \u2014 Tactics: 'lateral-movement'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1210/",
+                    "external_id": "T1210"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--cf63f1a6-b8bb-4fbb-a611-bf89626f3444",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.420153Z",
+            "modified": "2026-07-24T21:02:36.420153Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--5cbe82e2-e4fe-4250-a438-4af5e246cae4"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--6810d0fe-52fb-4dea-b383-0107794ee9f5",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.420218Z",
+            "modified": "2026-07-24T21:02:36.420218Z",
+            "name": "T1489: Service Stop",
+            "description": "MITRE ATT&CK Technique T1489 \u2014 Tactics: 'impact'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1489/",
+                    "external_id": "T1489"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--3dc773a0-2ff1-40f8-9d21-c9e7aadbded8",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.420296Z",
+            "modified": "2026-07-24T21:02:36.420296Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--6810d0fe-52fb-4dea-b383-0107794ee9f5"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--3925b3ae-b30d-4aa9-876d-668da8e3a538",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.420359Z",
+            "modified": "2026-07-24T21:02:36.420359Z",
+            "name": "T1083: File and Directory Discovery",
+            "description": "MITRE ATT&CK Technique T1083 \u2014 Tactics: 'discovery'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1083/",
+                    "external_id": "T1083"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--496e98ed-8df7-4849-898d-cc8b783035ce",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.420437Z",
+            "modified": "2026-07-24T21:02:36.420437Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--3925b3ae-b30d-4aa9-876d-668da8e3a538"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--07b96c8f-3b1f-480e-8ba6-62e845d2dc37",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.420501Z",
+            "modified": "2026-07-24T21:02:36.420501Z",
+            "name": "T1120: Peripheral Device Discovery",
+            "description": "MITRE ATT&CK Technique T1120 \u2014 Tactics: 'discovery'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1120/",
+                    "external_id": "T1120"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--6c512dc9-b0f8-4796-819b-11f73446eca8",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.420579Z",
+            "modified": "2026-07-24T21:02:36.420579Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--07b96c8f-3b1f-480e-8ba6-62e845d2dc37"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--84f96711-281e-41bb-8fc8-1579a4258355",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.42065Z",
+            "modified": "2026-07-24T21:02:36.42065Z",
+            "name": "T1486: Data Encrypted for Impact",
+            "description": "MITRE ATT&CK Technique T1486 \u2014 Tactics: 'impact'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1486/",
+                    "external_id": "T1486"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--a6578ff5-af76-436e-86ed-5dd875db54ac",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.42073Z",
+            "modified": "2026-07-24T21:02:36.42073Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--84f96711-281e-41bb-8fc8-1579a4258355"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--e827f06e-b7c6-4cc6-8b52-d1417359d575",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.420792Z",
+            "modified": "2026-07-24T21:02:36.420792Z",
+            "name": "T1047: Windows Management Instrumentation",
+            "description": "MITRE ATT&CK Technique T1047 \u2014 Tactics: 'execution'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1047/",
+                    "external_id": "T1047"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--b73a66ba-1a16-4e6b-9226-f85fd8499564",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.420869Z",
+            "modified": "2026-07-24T21:02:36.420869Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--e827f06e-b7c6-4cc6-8b52-d1417359d575"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--792ea5b4-5637-4d87-a8e3-353fe8ff6fc4",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.420939Z",
+            "modified": "2026-07-24T21:02:36.420939Z",
+            "name": "T1563.002: RDP Hijacking",
+            "description": "MITRE ATT&CK Technique T1563.002 \u2014 Tactics: 'lateral-movement'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1563/002/",
+                    "external_id": "T1563.002"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--c732bf0c-9c01-4d7b-8cac-ce550d0d1833",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.42102Z",
+            "modified": "2026-07-24T21:02:36.42102Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--792ea5b4-5637-4d87-a8e3-353fe8ff6fc4"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--704193e7-3e6c-43e3-b830-d6499b2c4fb6",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.421083Z",
+            "modified": "2026-07-24T21:02:36.421083Z",
+            "name": "T1490: Inhibit System Recovery",
+            "description": "MITRE ATT&CK Technique T1490 \u2014 Tactics: 'impact'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1490/",
+                    "external_id": "T1490"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--73e7d3aa-9c97-48ab-ae73-85f5a5e8ad1d",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.42116Z",
+            "modified": "2026-07-24T21:02:36.42116Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--704193e7-3e6c-43e3-b830-d6499b2c4fb6"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--0aa3f285-7a27-40b1-bad3-7e69b6ee8b61",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.421224Z",
+            "modified": "2026-07-24T21:02:36.421224Z",
+            "name": "T1018: Remote System Discovery",
+            "description": "MITRE ATT&CK Technique T1018 \u2014 Tactics: 'discovery'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1018/",
+                    "external_id": "T1018"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--16be548a-6e3b-4064-b43b-78e7e704b0d8",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.4213Z",
+            "modified": "2026-07-24T21:02:36.4213Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--0aa3f285-7a27-40b1-bad3-7e69b6ee8b61"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--a24afa56-5f72-4b1e-b6ce-5dd12e11709c",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.421362Z",
+            "modified": "2026-07-24T21:02:36.421362Z",
+            "name": "T1564.001: Hidden Files and Directories",
+            "description": "MITRE ATT&CK Technique T1564.001 \u2014 Tactics: 'stealth'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1564/001/",
+                    "external_id": "T1564.001"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--48887d5e-4d51-491a-80c3-140630b9d6d2",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.421431Z",
+            "modified": "2026-07-24T21:02:36.421431Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--a24afa56-5f72-4b1e-b6ce-5dd12e11709c"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--cf92954c-379b-4192-ac16-6a18dc35a437",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.421488Z",
+            "modified": "2026-07-24T21:02:36.421488Z",
+            "name": "T1016: System Network Configuration Discovery",
+            "description": "MITRE ATT&CK Technique T1016 \u2014 Tactics: 'discovery'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1016/",
+                    "external_id": "T1016"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--a037927f-da47-466d-a597-7e302ab19456",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.421559Z",
+            "modified": "2026-07-24T21:02:36.421559Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--cf92954c-379b-4192-ac16-6a18dc35a437"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--576fb8dd-2f69-4417-8ec4-6be769681f6f",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.421616Z",
+            "modified": "2026-07-24T21:02:36.421616Z",
+            "name": "T1222.001: Windows Permissions",
+            "description": "MITRE ATT&CK Technique T1222.001 \u2014 Tactics: 'defense-impairment'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1222/001/",
+                    "external_id": "T1222.001"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--05453a73-7096-4603-bc6e-ded0513c7408",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.421687Z",
+            "modified": "2026-07-24T21:02:36.421687Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--576fb8dd-2f69-4417-8ec4-6be769681f6f"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--c636783f-ea5f-4796-b8ac-e8f7ee8cdd54",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.421743Z",
+            "modified": "2026-07-24T21:02:36.421743Z",
+            "name": "T1090.003: Multi-hop Proxy",
+            "description": "MITRE ATT&CK Technique T1090.003 \u2014 Tactics: 'command-and-control'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1090/003/",
+                    "external_id": "T1090.003"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--8d8bb9da-5a0b-49da-82b1-11268a30338b",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.421813Z",
+            "modified": "2026-07-24T21:02:36.421813Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--c636783f-ea5f-4796-b8ac-e8f7ee8cdd54"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--6350c839-5acc-4037-a12f-a10c27457aad",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.421869Z",
+            "modified": "2026-07-24T21:02:36.421869Z",
+            "name": "T1573.002: Asymmetric Cryptography",
+            "description": "MITRE ATT&CK Technique T1573.002 \u2014 Tactics: 'command-and-control'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1573/002/",
+                    "external_id": "T1573.002"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--fa74e1a0-f2ac-41f7-8468-f6712611ba64",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.421938Z",
+            "modified": "2026-07-24T21:02:36.421938Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--6350c839-5acc-4037-a12f-a10c27457aad"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--b462f162-68e8-47d2-bbeb-0eab176e841c",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.421996Z",
+            "modified": "2026-07-24T21:02:36.421996Z",
+            "name": "T1543.003: Windows Service",
+            "description": "MITRE ATT&CK Technique T1543.003 \u2014 Tactics: 'persistence', 'privilege-escalation'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1543/003/",
+                    "external_id": "T1543.003"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--656a5e6e-1ff5-480d-9078-c6dc59ed09b9",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.422065Z",
+            "modified": "2026-07-24T21:02:36.422065Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--b462f162-68e8-47d2-bbeb-0eab176e841c"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--3f898709-7b7d-4aa7-bc71-0a34e8bc487a",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.422123Z",
+            "modified": "2026-07-24T21:02:36.422123Z",
+            "name": "T1570: Lateral Tool Transfer",
+            "description": "MITRE ATT&CK Technique T1570 \u2014 Tactics: 'lateral-movement'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1570/",
+                    "external_id": "T1570"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--66d5f126-e463-4f39-88ac-ce940eab30e2",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.422193Z",
+            "modified": "2026-07-24T21:02:36.422193Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23",
+            "target_ref": "attack-pattern--3f898709-7b7d-4aa7-bc71-0a34e8bc487a"
+        },
+        {
+            "type": "threat-actor",
+            "spec_version": "2.1",
+            "id": "threat-actor--10e414f3-50bd-4971-99ba-69e0e5e3a31b",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.422252Z",
+            "modified": "2026-07-24T21:02:36.422252Z",
+            "name": "Lazarus Group",
+            "description": "",
+            "aliases": [
+                "Lazarus Group",
+                "Labyrinth Chollima",
+                "HIDDEN COBRA",
+                "Guardians of Peace",
+                "ZINC",
+                "NICKEL ACADEMY",
+                "Diamond Sleet"
+            ],
+            "labels": [
+                "nation-state"
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--651d3d3f-5dde-47f3-a4a6-fba58547ea80",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.422322Z",
+            "modified": "2026-07-24T21:02:36.422322Z",
+            "relationship_type": "uses",
+            "source_ref": "threat-actor--10e414f3-50bd-4971-99ba-69e0e5e3a31b",
+            "target_ref": "malware--c8fa9e73-03df-4fa7-a133-46806cebfc23"
+        },
+        {
+            "type": "malware",
+            "spec_version": "2.1",
+            "id": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.42238Z",
+            "modified": "2026-07-24T21:02:36.42238Z",
+            "name": "trojan.wanna/wannacry",
+            "description": "",
+            "is_family": true
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--3b073c1b-3e95-44d6-875a-1292e45ebaa3",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.422447Z",
+            "modified": "2026-07-24T21:02:36.422447Z",
+            "relationship_type": "indicates",
+            "source_ref": "indicator--9190816e-28a5-43b2-9f6b-cadce4c3cc1f",
+            "target_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--4f9a052a-d51c-4bfb-8fd6-91e657aeeff4",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.422505Z",
+            "modified": "2026-07-24T21:02:36.422505Z",
+            "name": "T1210: Exploitation of Remote Services",
+            "description": "MITRE ATT&CK Technique T1210 \u2014 Tactics: 'lateral-movement'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1210/",
+                    "external_id": "T1210"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--df18ee36-2fe4-4a51-bb30-dd7f01ae9bf3",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.422688Z",
+            "modified": "2026-07-24T21:02:36.422688Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--4f9a052a-d51c-4bfb-8fd6-91e657aeeff4"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--5f56da37-a7da-4b84-b971-0a49bb64dd29",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.422815Z",
+            "modified": "2026-07-24T21:02:36.422815Z",
+            "name": "T1489: Service Stop",
+            "description": "MITRE ATT&CK Technique T1489 \u2014 Tactics: 'impact'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1489/",
+                    "external_id": "T1489"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--271e7292-7a95-49c6-a24f-d48ff1d32f80",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.422922Z",
+            "modified": "2026-07-24T21:02:36.422922Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--5f56da37-a7da-4b84-b971-0a49bb64dd29"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--ad4f16b9-707e-462c-887c-45ad90266605",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.422995Z",
+            "modified": "2026-07-24T21:02:36.422995Z",
+            "name": "T1083: File and Directory Discovery",
+            "description": "MITRE ATT&CK Technique T1083 \u2014 Tactics: 'discovery'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1083/",
+                    "external_id": "T1083"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--8e719dbb-8005-46de-bea5-31c2c44e67fc",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.423077Z",
+            "modified": "2026-07-24T21:02:36.423077Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--ad4f16b9-707e-462c-887c-45ad90266605"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--aaf5b951-234e-4649-bfbf-799fe609e1ad",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.423141Z",
+            "modified": "2026-07-24T21:02:36.423141Z",
+            "name": "T1120: Peripheral Device Discovery",
+            "description": "MITRE ATT&CK Technique T1120 \u2014 Tactics: 'discovery'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1120/",
+                    "external_id": "T1120"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--fbc5b5bd-ba4e-403b-9e4d-1614d0522862",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.423219Z",
+            "modified": "2026-07-24T21:02:36.423219Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--aaf5b951-234e-4649-bfbf-799fe609e1ad"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--d6ccbd2b-469b-497f-b584-df70378fe954",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.423283Z",
+            "modified": "2026-07-24T21:02:36.423283Z",
+            "name": "T1486: Data Encrypted for Impact",
+            "description": "MITRE ATT&CK Technique T1486 \u2014 Tactics: 'impact'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1486/",
+                    "external_id": "T1486"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--19548cdf-a3c4-498a-b450-3a84553c293a",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.42336Z",
+            "modified": "2026-07-24T21:02:36.42336Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--d6ccbd2b-469b-497f-b584-df70378fe954"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--0e0f09c3-8465-4f8c-b280-515313a04f25",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.423422Z",
+            "modified": "2026-07-24T21:02:36.423422Z",
+            "name": "T1047: Windows Management Instrumentation",
+            "description": "MITRE ATT&CK Technique T1047 \u2014 Tactics: 'execution'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1047/",
+                    "external_id": "T1047"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--849a18e9-7864-4ed5-b55c-08983b1f96bb",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.423499Z",
+            "modified": "2026-07-24T21:02:36.423499Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--0e0f09c3-8465-4f8c-b280-515313a04f25"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--751e88c4-9284-4856-ba80-d9681ea0890b",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.42356Z",
+            "modified": "2026-07-24T21:02:36.42356Z",
+            "name": "T1563.002: RDP Hijacking",
+            "description": "MITRE ATT&CK Technique T1563.002 \u2014 Tactics: 'lateral-movement'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1563/002/",
+                    "external_id": "T1563.002"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--79ca6983-0b7f-43c8-a1ca-4e61730dad12",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.423633Z",
+            "modified": "2026-07-24T21:02:36.423633Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--751e88c4-9284-4856-ba80-d9681ea0890b"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--12491bac-4772-4958-a128-5c93f6712363",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.423694Z",
+            "modified": "2026-07-24T21:02:36.423694Z",
+            "name": "T1490: Inhibit System Recovery",
+            "description": "MITRE ATT&CK Technique T1490 \u2014 Tactics: 'impact'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1490/",
+                    "external_id": "T1490"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--9c5d84be-1178-48cd-8406-e2879b10d5e8",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.42377Z",
+            "modified": "2026-07-24T21:02:36.42377Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--12491bac-4772-4958-a128-5c93f6712363"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--c85eff1c-b01f-446e-9166-9ae6e51673c2",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.423834Z",
+            "modified": "2026-07-24T21:02:36.423834Z",
+            "name": "T1018: Remote System Discovery",
+            "description": "MITRE ATT&CK Technique T1018 \u2014 Tactics: 'discovery'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1018/",
+                    "external_id": "T1018"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--6c1de1fb-3445-41e7-934b-e6b8915a44cc",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.42391Z",
+            "modified": "2026-07-24T21:02:36.42391Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--c85eff1c-b01f-446e-9166-9ae6e51673c2"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--eb01bcee-1645-4b4a-ac5a-65fd2c9ebd07",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.423971Z",
+            "modified": "2026-07-24T21:02:36.423971Z",
+            "name": "T1564.001: Hidden Files and Directories",
+            "description": "MITRE ATT&CK Technique T1564.001 \u2014 Tactics: 'stealth'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1564/001/",
+                    "external_id": "T1564.001"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--2452024f-7822-44a7-bd74-3f5d3a63f2f5",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.424047Z",
+            "modified": "2026-07-24T21:02:36.424047Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--eb01bcee-1645-4b4a-ac5a-65fd2c9ebd07"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--9703394f-044e-4ae7-a67a-604df3fd1cc4",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.424109Z",
+            "modified": "2026-07-24T21:02:36.424109Z",
+            "name": "T1016: System Network Configuration Discovery",
+            "description": "MITRE ATT&CK Technique T1016 \u2014 Tactics: 'discovery'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1016/",
+                    "external_id": "T1016"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--128f3510-7913-4a64-bfdb-565e365123e0",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.424368Z",
+            "modified": "2026-07-24T21:02:36.424368Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--9703394f-044e-4ae7-a67a-604df3fd1cc4"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--69ecab03-f14d-49be-b29a-f0771a883ad3",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.424436Z",
+            "modified": "2026-07-24T21:02:36.424436Z",
+            "name": "T1222.001: Windows Permissions",
+            "description": "MITRE ATT&CK Technique T1222.001 \u2014 Tactics: 'defense-impairment'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1222/001/",
+                    "external_id": "T1222.001"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--7b685566-e6b2-4a0e-a297-3266d0215c1f",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.424514Z",
+            "modified": "2026-07-24T21:02:36.424514Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--69ecab03-f14d-49be-b29a-f0771a883ad3"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--05fb608d-adbe-495b-92fc-81752b1b60a9",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.424575Z",
+            "modified": "2026-07-24T21:02:36.424575Z",
+            "name": "T1090.003: Multi-hop Proxy",
+            "description": "MITRE ATT&CK Technique T1090.003 \u2014 Tactics: 'command-and-control'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1090/003/",
+                    "external_id": "T1090.003"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--10c1dacb-2b65-4a05-bf9f-cfee070c9953",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.424651Z",
+            "modified": "2026-07-24T21:02:36.424651Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--05fb608d-adbe-495b-92fc-81752b1b60a9"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--12705490-ae7b-4d2d-af09-9f5600bc245c",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.424717Z",
+            "modified": "2026-07-24T21:02:36.424717Z",
+            "name": "T1573.002: Asymmetric Cryptography",
+            "description": "MITRE ATT&CK Technique T1573.002 \u2014 Tactics: 'command-and-control'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1573/002/",
+                    "external_id": "T1573.002"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--74c626dd-8634-46b6-999d-4d6c6594952b",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.424795Z",
+            "modified": "2026-07-24T21:02:36.424795Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--12705490-ae7b-4d2d-af09-9f5600bc245c"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--47cf064d-b8da-42c1-bf7b-a44d4f2e93f8",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.424856Z",
+            "modified": "2026-07-24T21:02:36.424856Z",
+            "name": "T1543.003: Windows Service",
+            "description": "MITRE ATT&CK Technique T1543.003 \u2014 Tactics: 'persistence', 'privilege-escalation'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1543/003/",
+                    "external_id": "T1543.003"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--6da10dee-9cca-4477-820f-c09a765380bd",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.424932Z",
+            "modified": "2026-07-24T21:02:36.424932Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--47cf064d-b8da-42c1-bf7b-a44d4f2e93f8"
+        },
+        {
+            "type": "attack-pattern",
+            "spec_version": "2.1",
+            "id": "attack-pattern--6068610f-44cb-494f-a442-5d4803ff26c7",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.424993Z",
+            "modified": "2026-07-24T21:02:36.424993Z",
+            "name": "T1570: Lateral Tool Transfer",
+            "description": "MITRE ATT&CK Technique T1570 \u2014 Tactics: 'lateral-movement'",
+            "external_references": [
+                {
+                    "source_name": "mitre-attack",
+                    "url": "https://attack.mitre.org/techniques/T1570/",
+                    "external_id": "T1570"
+                }
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--d9e252da-3473-49a8-ab82-1872c7d9d805",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.425066Z",
+            "modified": "2026-07-24T21:02:36.425066Z",
+            "relationship_type": "uses",
+            "source_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9",
+            "target_ref": "attack-pattern--6068610f-44cb-494f-a442-5d4803ff26c7"
+        },
+        {
+            "type": "threat-actor",
+            "spec_version": "2.1",
+            "id": "threat-actor--a7ca61b0-5760-4a9c-9ef8-b408b55c56df",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.425127Z",
+            "modified": "2026-07-24T21:02:36.425127Z",
+            "name": "Lazarus Group",
+            "description": "",
+            "aliases": [
+                "Lazarus Group",
+                "Labyrinth Chollima",
+                "HIDDEN COBRA",
+                "Guardians of Peace",
+                "ZINC",
+                "NICKEL ACADEMY",
+                "Diamond Sleet"
+            ],
+            "labels": [
+                "nation-state"
+            ]
+        },
+        {
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": "relationship--f48c37ed-e564-4b3b-8180-0963a49396ac",
+            "created_by_ref": "identity--4e91e125-45dc-493a-b1f6-25ad1b4f97f4",
+            "created": "2026-07-24T21:02:36.425206Z",
+            "modified": "2026-07-24T21:02:36.425206Z",
+            "relationship_type": "uses",
+            "source_ref": "threat-actor--a7ca61b0-5760-4a9c-9ef8-b408b55c56df",
+            "target_ref": "malware--91c0ec3f-7d35-4df1-87dc-087d7bdfc1d9"
+        }
+    ]
+}

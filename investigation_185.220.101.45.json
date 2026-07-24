@@ -1,0 +1,240 @@
+{
+  "indicator": "185.220.101.45",
+  "pivot_count": 2,
+  "ml_score": 0.9993,
+  "context_score": 0.5993,
+  "infrastructure_type": "tor_exit_node",
+  "context_note": "Infrastructure identified as tor_exit_node.",
+  "findings": [
+    "IP confirmed as a known Tor exit node (hostname tor-exit-45.for-privacy.net, Shodan tag 'Network for Tor-Exit traffic')",
+    "VirusTotal shows 16 malicious votes vs 43 harmless, indicating mixed but notable abuse reputation typical of Tor exit nodes",
+    "Only port 80 open, consistent with minimal Tor exit node footprint",
+    "Passive DNS shows mostly benign NTP pool infrastructure domains plus one unusual domain (eiwermi302.gw.to) that doesn't fit the NTP pattern",
+    "Censys lookup failed (422 error), limiting full host visibility",
+    "No dark web (Ahmia) references found",
+    "IP confirmed as a known Tor exit node (hostname tor-exit-45.for-privacy.net, Shodan tag 'Network for Tor-Exit traffic')",
+    "VirusTotal shows moderate malicious detections (16 malicious vs 43 harmless votes), consistent with abuse commonly associated with Tor exit nodes rather than dedicated malware infrastructure",
+    "Passive DNS history is mostly benign (NTP pool domains, generic gw.to entry) with no clear malicious domain associations",
+    "No dark web (Ahmia) references found, and Censys lookup failed with an API error",
+    "Owner 'Stiftung Erneuerbare Freiheit' is a known German non-profit that operates Tor exit nodes, supporting legitimate infrastructure use"
+  ],
+  "summary": "## Investigation Summary\n\n**Threat Level: Low-Moderate (context-dependent)**\n\n185.220.101.45 is a confirmed Tor exit node (tor-exit-45.for-privacy.net) operated by Stiftung Erneuerbare Freiheit, a known German non-profit running legitimate Tor infrastructure. This ownership context significantly de-risks the raw ML score.\n\n**Key indicators:**\n- VirusTotal's 16 malicious / 43 harmless vote split reflects abuse typical of any high-traffic Tor exit node (shared reputation from anonymized malicious traffic), not indicators of dedicated attacker infrastructure.\n- Single open port (80) is consistent with minimal exit node footprint \u2014 no unusual service exposure.\n- Passive DNS is dominated by benign NTP pool domains; one outlier (eiwermi302.gw.to) doesn't match the pattern and lacks context \u2014 worth a quick standalone lookup but not currently corroborated as malicious.\n- No Ahmia dark web references found.\n\n**Visibility gaps:**\n- Censys lookup failed (422 error) \u2014 no current host/service/cert data, limiting confirmation of exposed services beyond Shodan's single-port view.\n- No malware/C2 sandbox correlation available in this pivot set.\n\n**Recommended actions:**\n1. Treat detections involving this IP as likely anonymized user traffic, not a dedicated threat actor asset, unless corroborated by payload/behavioral evidence.\n2. Re-run Censys manually or via alternate query to close the visibility gap.\n3. Pivot on eiwermi302.gw.to independently to rule out unrelated malicious tenancy.\n4. Apply standard Tor egress alerting policy rather than IOC blocklisting.\n\n---\n\n**Context Note:** The ML score (0.9993) is driven by the raw abuse/vote signals VirusTotal associates with this IP, while the context-adjusted score (0.5993) is lowered because the platform recognizes it as a known, attributable Tor exit node operated by a legitimate non-profit \u2014 infrastructure that inherently accumulates abuse reports from anonymized third-party traffic rather than operator-driven malicious activity.",
+  "full_results": [
+    {
+      "indicator": "185.220.101.45",
+      "type": "ipv4",
+      "results": {
+        "virustotal": {
+          "indicator": "185.220.101.45",
+          "type": "ipv4",
+          "source": "virustotal",
+          "malicious_votes": 16,
+          "harmless_votes": 43,
+          "country": "DE",
+          "owner": "Stiftung Erneuerbare Freiheit"
+        },
+        "shodan": {
+          "indicator": "185.220.101.45",
+          "type": "ipv4",
+          "source": "shodan",
+          "organization": "Network for Tor-Exit traffic.",
+          "country": "Germany",
+          "open_ports": [
+            80
+          ],
+          "hostnames": [
+            "tor-exit-45.for-privacy.net"
+          ],
+          "tags": []
+        },
+        "passivedns": {
+          "indicator": "185.220.101.45",
+          "type": "ipv4",
+          "source": "passivedns",
+          "record_count": 10,
+          "records": [
+            {
+              "domain": "tor-exit-45.for-privacy.net",
+              "record_type": "a",
+              "first_seen": 1640215116660,
+              "last_seen": 1713785672376
+            },
+            {
+              "domain": "eiwermi302.gw.to",
+              "record_type": "a",
+              "first_seen": 1677737569227,
+              "last_seen": 1678619539085
+            },
+            {
+              "domain": "2.pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580568053820,
+              "last_seen": 1581121193760
+            },
+            {
+              "domain": "de.pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580568303151,
+              "last_seen": 1581119490168
+            },
+            {
+              "domain": "1.ubuntu.pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580616461382,
+              "last_seen": 1581119184770
+            },
+            {
+              "domain": "pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580571606742,
+              "last_seen": 1581118230736
+            },
+            {
+              "domain": "europe.pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580570395060,
+              "last_seen": 1581118113696
+            },
+            {
+              "domain": "2.ubuntu.pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580587195652,
+              "last_seen": 1581115746683
+            },
+            {
+              "domain": "0.ubuntu.pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580582521749,
+              "last_seen": 1581115375524
+            },
+            {
+              "domain": "0.pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580567056687,
+              "last_seen": 1581114661794
+            }
+          ]
+        },
+        "censys": {
+          "error": "422 Client Error: Unprocessable Entity for url: https://api.platform.censys.io/v3/global/asset/host/185.220.101.45",
+          "indicator": "185.220.101.45",
+          "source": "censys"
+        },
+        "ahmia": {
+          "indicator": "185.220.101.45",
+          "source": "ahmia",
+          "result_count": 0,
+          "results": []
+        }
+      }
+    },
+    {
+      "indicator": "185.220.101.45",
+      "type": "ipv4",
+      "results": {
+        "virustotal": {
+          "indicator": "185.220.101.45",
+          "type": "ipv4",
+          "source": "virustotal",
+          "malicious_votes": 16,
+          "harmless_votes": 43,
+          "country": "DE",
+          "owner": "Stiftung Erneuerbare Freiheit"
+        },
+        "shodan": {
+          "indicator": "185.220.101.45",
+          "type": "ipv4",
+          "source": "shodan",
+          "organization": "Network for Tor-Exit traffic.",
+          "country": "Germany",
+          "open_ports": [
+            80
+          ],
+          "hostnames": [
+            "tor-exit-45.for-privacy.net"
+          ],
+          "tags": []
+        },
+        "passivedns": {
+          "indicator": "185.220.101.45",
+          "type": "ipv4",
+          "source": "passivedns",
+          "record_count": 10,
+          "records": [
+            {
+              "domain": "tor-exit-45.for-privacy.net",
+              "record_type": "a",
+              "first_seen": 1640215116660,
+              "last_seen": 1713785672376
+            },
+            {
+              "domain": "eiwermi302.gw.to",
+              "record_type": "a",
+              "first_seen": 1677737569227,
+              "last_seen": 1678619539085
+            },
+            {
+              "domain": "2.pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580568053820,
+              "last_seen": 1581121193760
+            },
+            {
+              "domain": "de.pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580568303151,
+              "last_seen": 1581119490168
+            },
+            {
+              "domain": "1.ubuntu.pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580616461382,
+              "last_seen": 1581119184770
+            },
+            {
+              "domain": "pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580571606742,
+              "last_seen": 1581118230736
+            },
+            {
+              "domain": "europe.pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580570395060,
+              "last_seen": 1581118113696
+            },
+            {
+              "domain": "2.ubuntu.pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580587195652,
+              "last_seen": 1581115746683
+            },
+            {
+              "domain": "0.ubuntu.pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580582521749,
+              "last_seen": 1581115375524
+            },
+            {
+              "domain": "0.pool.ntp.org",
+              "record_type": "a",
+              "first_seen": 1580567056687,
+              "last_seen": 1581114661794
+            }
+          ]
+        },
+        "censys": {
+          "error": "422 Client Error: Unprocessable Entity for url: https://api.platform.censys.io/v3/global/asset/host/185.220.101.45",
+          "indicator": "185.220.101.45",
+          "source": "censys"
+        },
+        "ahmia": {
+          "indicator": "185.220.101.45",
+          "source": "ahmia",
+          "result_count": 0,
+          "results": []
+        }
+      }
+    }
+  ]
+}

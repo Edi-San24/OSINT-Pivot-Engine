@@ -21,13 +21,19 @@ PATTERNS = {
     "email": re.compile(
         r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$"
     ),
+
     "username": re.compile(
         r"^[a-zA-Z0-9._\-]{3,30}$"
+
     ),
+    "threat_group": re.compile(
+    r"^[a-zA-Z0-9][a-zA-Z0-9\s\-\_\.]{2,60}$"
+    ),
+
 }
 
 # Priority order matters — more specific patterns run first
-DETECTION_ORDER = ["email", "ipv4", "sha256", "sha1", "md5", "domain", "username"]
+DETECTION_ORDER = ["email", "ipv4", "sha256", "sha1", "md5", "domain","username", "threat_group"]
 
 def detect_type(seed: str) -> dict:
     """
