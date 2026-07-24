@@ -1,6 +1,8 @@
-venv/
-.env
-__pycache__/
-*.pyc
-.DS_Store
+mlruns/
+mlflow.db
+*.json
 data/
+venv/
+__pycache__/
+.env
+ahmia_debug.html
