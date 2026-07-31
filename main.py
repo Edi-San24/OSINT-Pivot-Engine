@@ -1,17 +1,18 @@
 # main.py
-# CLI entry point for project 
+# CLI entry point for project
 
 import click
 import json
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 from rich import box
 from core.agent import run_agent
 from core.stix_exporter import STIXExporter
 
-
 console = Console()
+
 
 def get_risk_color(risk_level: str) -> str:
     if risk_level == "HIGH":
@@ -21,6 +22,7 @@ def get_risk_color(risk_level: str) -> str:
     else:
         return "bold green"
 
+
 def get_context_score_risk(score: float) -> str:
     if score >= 0.7:
         return "HIGH"
@@ -28,6 +30,38 @@ def get_context_score_risk(score: float) -> str:
         return "MEDIUM"
     else:
         return "LOW"
+
+
+def format_summary(summary: str) -> Text:
+    """
+    Formats the structured investigation summary for Rich terminal display.
+    Colors each section label for readability.
+    """
+    text = Text()
+    lines = summary.strip().split("\n")
+
+    section_colors = {
+        "THREAT LEVEL:": "bold white",
+        "ASSESSMENT:": "bold cyan",
+        "KEY INDICATORS:": "bold cyan",
+        "VISIBILITY GAPS:": "bold yellow",
+        "RECOMMENDED ACTIONS:": "bold cyan",
+    }
+
+    for line in lines:
+        stripped = line.strip()
+        matched = False
+        for label, color in section_colors.items():
+            if stripped.startswith(label):
+                text.append(label + " ", style=color)
+                text.append(stripped[len(label):].strip() + "\n")
+                matched = True
+                break
+        if not matched:
+            text.append(line + "\n")
+
+    return text
+
 
 @click.command()
 @click.option("--seed", required=True, help="The indicator to investigate (IP, domain, hash, email, or username)")
@@ -70,21 +104,30 @@ def run(seed, output, depth, export_stix):
     if result['context_note']:
         table.add_row("Note", f"[dim]{result['context_note']}[/dim]")
 
+    # Check for early warning in findings
+    early_warnings = [f for f in result['findings'] if "EARLY WARNING" in f]
+    if early_warnings:
+        table.add_row("", "")
+        table.add_row("[bold red]EARLY WARNING[/bold red]", f"[red]{early_warnings[0]}[/red]")
+
+    # Check for NER actor recommendations in findings
+    ner_notes = [f for f in result['findings'] if "Threat actors mentioned" in f]
+    if ner_notes:
+        table.add_row("[bold yellow]NER[/bold yellow]", f"[yellow]{ner_notes[0]}[/yellow]")
+
     console.print(table)
 
     console.print(Panel(
-        result['summary'],
+        format_summary(result['summary']),
         title="[bold]Investigation Summary[/bold]",
-        border_style=risk_color.replace("bold ", "")
+        border_style=risk_color.replace("bold ", ""),
+        padding=(1, 2)
     ))
 
     if output:
         with open(output, "w") as f:
             json.dump(result, f, indent=2, default=str)
         console.print(f"\n[green]Results saved to {output}[/green]")
-    else:
-        console.print("\n[dim]Full results:[/dim]")
-        console.print_json(json.dumps(result['full_results'], default=str))
 
     if export_stix:
         exporter = STIXExporter()
@@ -93,6 +136,7 @@ def run(seed, output, depth, export_stix):
             console.print(f"\n[green]STIX 2.1 bundle exported to {path}[/green]")
         else:
             console.print("\n[red]STIX export failed — no results to export.[/red]")
+
 
 if __name__ == "__main__":
     run()

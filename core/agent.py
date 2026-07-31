@@ -5,73 +5,89 @@
 
 import json
 import logging
-import re
-from typing import TypedDict, List
-from langgraph.graph import StateGraph, START, END
+ 
+from typing import TypedDict
+from langgraph.graph import StateGraph, END
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, SystemMessage
-from config import ANTHROPIC_API_KEY, MAX_PIVOT_DEPTH
+from langchain_core.messages import SystemMessage, HumanMessage
+ 
+import config
+from config import ANTHROPIC_API_KEY
 from core.executor import PivotExecutor
 from core.scorer import ConfidenceScorer
-
+from core.context import detect_infrastructure_type
+from core.graph_scorer import GraphScorer
+from core.temporal_scorer import TemporalScorer
+from core.ner_extractor import NERExtractor
+from core.detector import detect_type
+ 
+logging.basicConfig(level=logging.ERROR)
+logger = logging.getLogger(__name__)
+ 
+# Global instances
+llm = ChatAnthropic(
+    model="claude-opus-5",
+    api_key=ANTHROPIC_API_KEY,
+)
+ 
+executor = PivotExecutor()
+scorer = ConfidenceScorer()
+graph_scorer = GraphScorer()
+temporal_scorer = TemporalScorer()
+ner_extractor = NERExtractor()
+ 
+ 
 class AgentState(TypedDict):
     seed: str
     current_seed: str
     indicator_type: str
-    pivot_results: List[dict]
-    pivot_count: int
+    pivot_results: list
+    pivot_queue: list
+    visited: list
+    findings: list
     should_continue: bool
-    findings: List[str]
-    summary: str
     ml_score: float
     context_score: float
     infrastructure_type: str
     context_note: str
-    pivot_queue: List[str]
-    visited: List[str]
-
-llm = ChatAnthropic(
-    model="claude-sonnet-5",
-    api_key=ANTHROPIC_API_KEY,
-)
-
-executor = PivotExecutor()
-scorer = ConfidenceScorer()
-
-logger = logging.getLogger(__name__)
-
-
+    summary: str
+    pivot_count: int
+ 
+ 
 def is_ipv4(value: str) -> bool:
-    pattern = r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"
-    return bool(re.match(pattern, value))
-
-
+    import re
+    return bool(re.match(r"^(\d{1,3}\.){3}\d{1,3}$", value))
+ 
+ 
 def is_domain(value: str) -> bool:
-    pattern = r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$"
-    return bool(re.match(pattern, value))
-
-
-def extract_new_indicators(result: dict, visited: List[str]) -> List[str]:
+    import re
+    return bool(re.match(
+        r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$",
+        value
+    ))
+ 
+ 
+def extract_new_indicators(result: dict, visited: list) -> list:
     """
     Extracts new pivotable indicators from a completed pivot result.
-    For domains: extracts IPs from PassiveDNS A records and subdomains from crt.sh.
+    For domains: extracts IPs from PassiveDNS and subdomains from crt.sh.
     For IPs: extracts domains from PassiveDNS records.
     For hashes: extracts related SHA256 hashes from MalwareBazaar tag results.
     """
     new_indicators = []
     indicator_type = result.get("type", "")
     results = result.get("results", {})
-
+ 
     passivedns = results.get("passivedns", {})
     records = passivedns.get("records", [])
-
+ 
     if indicator_type == "domain":
         for record in records:
             ip = record.get("ip", "")
             record_type = record.get("record_type", "")
             if record_type == "a" and ip and is_ipv4(ip) and ip not in visited:
                 new_indicators.append(ip)
-
+ 
         censys = results.get("censys", {})
         for cert in censys.get("certificates", []):
             names = cert.get("names", "")
@@ -79,13 +95,13 @@ def extract_new_indicators(result: dict, visited: List[str]) -> List[str]:
                 name = name.strip().lstrip("*.")
                 if name and is_domain(name) and name not in visited:
                     new_indicators.append(name)
-
+ 
     elif indicator_type == "ipv4":
         for record in records:
             value = record.get("ip", "")
             if value and is_domain(value) and value not in visited:
                 new_indicators.append(value)
-
+ 
     elif indicator_type == "hash":
         bazaar_related = results.get("malwarebazaar_related", {})
         samples = bazaar_related.get("samples", [])
@@ -93,17 +109,23 @@ def extract_new_indicators(result: dict, visited: List[str]) -> List[str]:
             sha256 = sample.get("sha256", "")
             if sha256 and sha256 != "unknown" and sha256 not in visited:
                 new_indicators.append(sha256)
-
+ 
+    # NER extraction — scan text fields for threat actor mentions
+    threat_actors = ner_extractor.extract_threat_actors(result, visited)
+    for actor in threat_actors:
+        if actor not in new_indicators:
+            new_indicators.append(actor)
+ 
     seen = set()
     clean = []
     for ind in new_indicators:
         if ind not in visited and ind not in seen:
             seen.add(ind)
             clean.append(ind)
-
+ 
     return clean
-
-
+ 
+ 
 def run_pivot(state: AgentState) -> AgentState:
     """
     Runs the pivot chain for the current_seed indicator.
@@ -111,23 +133,23 @@ def run_pivot(state: AgentState) -> AgentState:
     """
     current = state["current_seed"]
     logger.info(f"Agent running pivot for: {current}")
-
+ 
     result = executor.run(current)
-
+ 
     state["pivot_results"].append(result)
     state["pivot_count"] += 1
     state["visited"].append(current)
-
+ 
     new_indicators = extract_new_indicators(result, state["visited"])
     if new_indicators:
         logger.info(f"Discovered {len(new_indicators)} new indicators: {new_indicators}")
         state["pivot_queue"].extend(new_indicators)
-
+ 
     logger.info(f"Pivot {state['pivot_count']} complete. Queue depth: {len(state['pivot_queue'])}")
-
+ 
     return state
-
-
+ 
+ 
 def analyze_results(state: AgentState) -> AgentState:
     """
     Uses Claude to analyze pivot results and determine
@@ -135,67 +157,76 @@ def analyze_results(state: AgentState) -> AgentState:
     Advances queue and sets next current_seed here.
     """
     logger.info("Agent analyzing pivot results...")
-
+ 
     latest_result = state["pivot_results"][-1]
-
+ 
     system_prompt = """You are an expert cyber threat intelligence analyst.
 You will be given OSINT pivot results for a seed indicator.
 Your job is to:
 1. Identify any suspicious or notable findings
 2. Determine whether further pivoting is warranted
 3. List specific findings as short bullet points
-
+ 
 Respond in JSON format only. Do not wrap your response in markdown code blocks. Return raw JSON only:
 {
     "findings": ["finding 1", "finding 2"],
     "should_continue": true or false,
     "reason": "brief explanation of your decision"
 }"""
-
+ 
     user_message = f"""Analyze these OSINT pivot results:
-
+ 
 Indicator: {state['current_seed']}
 Type: {state['indicator_type']}
 Pivot count: {state['pivot_count']}
-Max allowed pivots: {MAX_PIVOT_DEPTH}
+Max allowed pivots: {config.MAX_PIVOT_DEPTH}
 Indicators in queue: {len(state['pivot_queue'])}
-
+ 
 Results:
 {json.dumps(latest_result, indent=2, default=str)}"""
-
+ 
     response = llm.invoke([
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_message)
     ])
-
+ 
     try:
         content = response.content
         if isinstance(content, list):
             content = content[0].get("text", "") if content else ""
-
-        # Strip markdown fences if Claude wraps response despite instructions
+ 
         content = content.strip()
         if content.startswith("```"):
             content = content.split("```")[1]
             if content.startswith("json"):
                 content = content[4:]
             content = content.strip()
-
+ 
         analysis = json.loads(content)
         state["findings"].extend(analysis.get("findings", []))
         state["should_continue"] = analysis.get("should_continue", False)
         logger.info(f"Analysis complete. Continue: {state['should_continue']}")
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse LLM response as JSON: {e} | Raw: {content[:200]}")
-        state["should_continue"] = False
-
+        # Don't stop — keep going if there are indicators in the queue
+        state["should_continue"] = len(state["pivot_queue"]) > 0
+ 
+    # NER — scan latest pivot result for threat actor mentions and queue them
+    if state["pivot_results"]:
+        latest = state["pivot_results"][-1]
+        actors = ner_extractor.extract_threat_actors(latest, state["visited"])
+        for actor in actors:
+            if actor not in state["pivot_queue"] and actor not in state["visited"]:
+                state["pivot_queue"].append(actor)
+                logger.info(f"NER queued threat actor: {actor}")
+ 
     # If queue is empty, stop regardless of what the LLM decided
     if not state["pivot_queue"]:
         state["should_continue"] = False
         logger.info("Queue is empty. Moving to summarize.")
-
+ 
     # Advance queue — skip anything already visited
-    if state["pivot_queue"] and state["pivot_count"] < MAX_PIVOT_DEPTH:
+    if state["pivot_queue"] and state["pivot_count"] < config.MAX_PIVOT_DEPTH:
         next_seed = None
         while state["pivot_queue"]:
             candidate = state["pivot_queue"].pop(0)
@@ -209,186 +240,202 @@ Results:
         else:
             state["should_continue"] = False
             logger.info("Queue exhausted after deduplication. Moving to summarize.")
-
+ 
     return state
-
-
+ 
+ 
 def apply_context(state: AgentState) -> AgentState:
     """
     Runs the context layer on pivot results.
-    Calculates both ML score and context adjusted score.
+    Calculates ML score, graph score, temporal score, and context adjusted score.
     """
     logger.info("Applying context layer...")
-
+ 
     if not state["pivot_results"]:
         return state
-
+ 
     pivot_result = state["pivot_results"][0]
-
-    raw = scorer.score(pivot_result)
-    ml_score = raw.get("confidence_score", 0.0)
-
-    from core.context import detect_infrastructure_type
+    indicator_type = pivot_result.get("type", "")
+ 
+    if indicator_type == "threat_group":
+        raw = scorer.score_threat_group(pivot_result)
+        ml_score = raw.get("confidence_score", 0.0)
+        graph_score = 0.0
+        temporal_score = 0.0
+        early_warning = False
+    else:
+        raw = scorer.score(pivot_result)
+        ml_score = raw.get("confidence_score", 0.0)
+ 
+        graph_scores = graph_scorer.score_all(state["pivot_results"])
+        graph_score = graph_scores.get(state["seed"], 0.0)
+ 
+        temporal_result = temporal_scorer.score(pivot_result)
+        temporal_score = temporal_result.get("temporal_score", 0.0)
+        early_warning = temporal_result.get("early_warning", False)
+ 
+    blended_score = graph_scorer.blend_scores(ml_score, graph_score)
+    blended_score = temporal_scorer.blend_with_ml(blended_score, temporal_score)
+ 
     context = detect_infrastructure_type(pivot_result)
-
     modifier = context.get("confidence_modifier", 0.0)
-    context_score = max(0.0, min(1.0, ml_score + modifier))
-
-    state["ml_score"] = ml_score
+    context_score = max(0.0, min(1.0, blended_score + modifier))
+ 
+    state["ml_score"] = blended_score
     state["context_score"] = round(context_score, 4)
     state["infrastructure_type"] = context.get("infrastructure_type", "unknown")
-
-    logger.info(f"ML score: {ml_score} | Context score: {context_score} | Infrastructure: {state['infrastructure_type']}")
-
+ 
+    if early_warning:
+        state["findings"].append(
+            "EARLY WARNING: Related malware samples detected within the last 7 days — active campaign signal."
+        )
+ 
+    logger.info(f"ML score: {blended_score} | Graph: {graph_score} | Temporal: {temporal_score} | Context: {context_score}")
+ 
     return state
-
-
+ 
+ 
 def summarize(state: AgentState) -> AgentState:
     """
     Uses Claude to produce a final analyst-facing
     investigation summary and context note.
+    Runs NER on the generated summary to surface
+    any threat actor mentions for analyst follow-up.
     """
     logger.info("Agent generating final summary...")
-
+ 
     system_prompt = """You are an expert cyber threat intelligence analyst reviewing OSINT pivot results.
-
-Your job is to produce two things:
-
-1. A concise investigation summary (under 200 words) covering:
-   - Threat level and overall assessment
-   - Key indicators and what they mean
-   - Notable gaps in visibility
-   - Recommended analyst actions
-
-2. A single sentence context note explaining the difference between 
-   the ML score and the context adjusted score. Be specific to the 
-   infrastructure type detected. If no infrastructure type was detected 
-   write nothing for the note.
-
-Write for a SOC analyst who needs to make a fast, informed decision. 
-Avoid generic statements. Be precise and actionable.
-Never fabricate data not present in the results.
-If sources failed or returned errors acknowledge the visibility gap."""
-
+ 
+Produce a structured investigation summary using exactly this format:
+ 
+THREAT LEVEL: [HIGH / MEDIUM / LOW / UNKNOWN] — [one sentence verdict]
+ 
+ASSESSMENT:
+[2-3 sentences covering what was found and what it means. Be specific to the actual data.]
+ 
+KEY INDICATORS:
+- [Specific finding 1]
+- [Specific finding 2]
+- [Specific finding 3 if applicable]
+ 
+VISIBILITY GAPS:
+[One sentence on what sources failed or returned no data.]
+ 
+RECOMMENDED ACTIONS:
+1. [Specific action]
+2. [Specific action]
+3. [Specific action if applicable]
+ 
+Write for a SOC analyst making a fast decision. Never fabricate data not in the results. If a source errored, acknowledge the gap. No markdown headers with # symbols. No bold with **."""
+ 
     user_message = f"""Write an investigation summary for:
-
+ 
 Seed Indicator: {state['seed']}
-Total indicators investigated: {len(state['visited'])}
-All investigated indicators: {state['visited']}
-Total pivots run: {state['pivot_count']}
+Indicators investigated: {state['visited']}
+Pivots run: {state['pivot_count']}
 ML Score: {state['ml_score']}
 Context Score: {state['context_score']}
 Infrastructure Type: {state['infrastructure_type']}
-
+ 
 Key findings:
 {json.dumps(state['findings'], indent=2)}
-
+ 
 Full results:
-{json.dumps(state['pivot_results'], indent=2, default=str)}
-
-Also write a one sentence context note explaining why the ML score 
-and context score differ if they do. If infrastructure type is unknown 
-write nothing for the note. Be specific to this indicator."""
-
+{json.dumps(state['pivot_results'], indent=2, default=str)}"""
+ 
     response = llm.invoke([
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_message)
     ])
-
+ 
     content = response.content
     if isinstance(content, list):
         for block in content:
             if isinstance(block, dict) and block.get("type") == "text":
                 content = block.get("text", "")
                 break
-
+ 
     state["summary"] = content
-    state["context_note"] = f"Infrastructure identified as {state['infrastructure_type']}." if state['infrastructure_type'] != "unknown" else ""
-
+ 
+    # NER — scan summary text for threat actor mentions
+    summary_pseudo_result = {"results": {"ahmia": {"results": [{"snippet": content}]}}}
+    actors_found = ner_extractor.extract_threat_actors(summary_pseudo_result, state["visited"])
+    if actors_found:
+        note = f"Threat actors mentioned in summary (recommend follow-up pivots): {', '.join(actors_found)}"
+        state["findings"].append(note)
+        logger.info(f"NER found actors in summary: {actors_found}")
+ 
+    state["context_note"] = (
+        f"Infrastructure identified as {state['infrastructure_type']}."
+        if state['infrastructure_type'] != "unknown"
+        else ""
+    )
+ 
     logger.info("Summary complete.")
     return state
-
-
+ 
+ 
 def should_continue_pivot(state: AgentState) -> str:
-    """
-    Routing function only — no state mutation here.
-    Decision is based on should_continue flag set in analyze_results.
-    """
-    if state["pivot_count"] >= MAX_PIVOT_DEPTH:
-        logger.info("Max pivot depth reached. Moving to summarize.")
+    if state["pivot_count"] >= config.MAX_PIVOT_DEPTH:
         return "summarize"
-
     if state["should_continue"]:
-        logger.info(f"Continuing pivot on: {state['current_seed']}")
         return "run_pivot"
-
-    logger.info("No more indicators to investigate. Moving to summarize.")
     return "summarize"
-
-
-def build_agent() -> StateGraph:
+ 
+ 
+def run_agent(seed: str) -> dict:
     """
-    Builds and compiles the LangGraph agent.
+    Entry point for the OSINT Pivot Engine agent.
+    Initializes state and runs the full LangGraph pipeline.
     """
+    detected = detect_type(seed)
+    indicator_type = detected["type"] if detected else "unknown"
+ 
+    initial_state: AgentState = {
+        "seed": seed,
+        "current_seed": seed,
+        "indicator_type": indicator_type,
+        "pivot_results": [],
+        "pivot_queue": [],
+        "visited": [],
+        "findings": [],
+        "should_continue": True,
+        "ml_score": 0.0,
+        "context_score": 0.0,
+        "infrastructure_type": "unknown",
+        "context_note": "",
+        "summary": "",
+        "pivot_count": 0,
+    }
+ 
     graph = StateGraph(AgentState)
-
     graph.add_node("run_pivot", run_pivot)
     graph.add_node("analyze_results", analyze_results)
     graph.add_node("apply_context", apply_context)
     graph.add_node("summarize", summarize)
-
-    graph.add_edge(START, "run_pivot")
+ 
+    graph.set_entry_point("run_pivot")
     graph.add_edge("run_pivot", "analyze_results")
     graph.add_conditional_edges(
         "analyze_results",
         should_continue_pivot,
-        {
-            "run_pivot": "run_pivot",
-            "summarize": "apply_context"
-        }
+        {"run_pivot": "run_pivot", "summarize": "apply_context"}
     )
     graph.add_edge("apply_context", "summarize")
     graph.add_edge("summarize", END)
-
-    return graph.compile()
-
-
-def run_agent(seed: str) -> dict:
-    """
-    Entry point for the OSINT Pivot Engine agent.
-    """
-    agent = build_agent()
-
-    initial_state = AgentState(
-        seed=seed,
-        current_seed=seed,
-        indicator_type="",
-        pivot_results=[],
-        pivot_count=0,
-        should_continue=True,
-        findings=[],
-        summary="",
-        ml_score=0.0,
-        context_score=0.0,
-        infrastructure_type="unknown",
-        context_note="",
-        pivot_queue=[],
-        visited=[]
-    )
-
-    logger.info(f"Agent starting investigation for: {seed[:50]}")
-
+ 
+    agent = graph.compile()
     final_state = agent.invoke(initial_state)
-
+ 
     return {
-        "indicator": seed,
-        "indicators_investigated": final_state["visited"],
+        "summary": final_state["summary"],
+        "findings": final_state["findings"],
         "pivot_count": final_state["pivot_count"],
         "ml_score": final_state["ml_score"],
         "context_score": final_state["context_score"],
         "infrastructure_type": final_state["infrastructure_type"],
         "context_note": final_state["context_note"],
-        "findings": final_state["findings"],
-        "summary": final_state["summary"],
-        "full_results": final_state["pivot_results"]
+        "full_results": final_state["pivot_results"],
+        "visited": final_state["visited"],
+        "indicator": seed,
     }

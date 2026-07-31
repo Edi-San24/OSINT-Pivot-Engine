@@ -1,22 +1,30 @@
 # scripts/collect_training_data.py
 # Collects real labeled IOC data for ML model training.
-# Pulls confirmed malicious IPs from ThreatFox and known
-# clean IPs from public sources, extracts features, and
-# saves to data/training_data.csv
+# Pulls confirmed malicious IPs from ThreatFox, Feodo Tracker, and URLhaus,
+# and diverse benign IPs including Tor exit nodes and shared hosting,
+# extracts features, and saves to data/training_data.csv
+
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests
 import pandas as pd
 import time
-import json
+import random
 import logging
+from urllib.parse import urlparse
 from core.features import extract_features, FEATURE_COLUMNS
 from core.executor import PivotExecutor
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+# Dedicated logger — avoids conflict with executor's logging config
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)
+formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
 # Output path
 OUTPUT_PATH = "data/training_data.csv"
@@ -30,83 +38,159 @@ BENIGN_SAMPLE_SIZE = 200
 
 from config import THREATFOX_API_KEY
 
+
 def fetch_malicious_ips() -> list:
     """
-    Pulls confirmed malicious IPs from ThreatFox CSV export.
-    Returns a list of IP strings labeled as malicious.
+    Pulls confirmed malicious IPs from multiple threat feeds
+    to create a diverse and challenging malicious training set.
+    Sources: ThreatFox, Feodo Tracker, URLhaus.
     """
-    logger.info("Fetching malicious IPs from ThreatFox CSV export...")
+    logger.info("Fetching malicious IPs from multiple threat feeds...")
 
-    url = "https://threatfox.abuse.ch/export/csv/ip-port/recent/"
+    ips = []
 
+    # Source 1 — ThreatFox recent C2 IPs
     try:
-        response = requests.get(url)
+        logger.info("Fetching from ThreatFox...")
+        response = requests.get(
+            "https://threatfox.abuse.ch/export/csv/ip-port/recent/",
+            timeout=15
+        )
         response.raise_for_status()
-
-        ips = []
         for line in response.text.splitlines():
             if line.startswith("#") or not line.strip():
                 continue
             parts = line.split(",")
-            if len(parts) < 2:
+            if len(parts) < 3:
                 continue
             raw = parts[2].strip().strip('"')
             ip = raw.split(":")[0]
             if ip and ip not in ips:
                 ips.append(ip)
+            if len(ips) >= 80:
+                break
+        logger.info(f"ThreatFox: {len(ips)} IPs collected.")
+    except Exception as e:
+        logger.warning(f"ThreatFox failed: {str(e)[:100]}")
+
+    # Source 2 — Feodo Tracker botnet C2s
+    try:
+        logger.info("Fetching from Feodo Tracker...")
+        before = len(ips)
+        response = requests.get(
+            "https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
+            timeout=15
+        )
+        response.raise_for_status()
+        for line in response.text.splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            ip = line.strip()
+            if ip and ip not in ips:
+                ips.append(ip)
+            if len(ips) >= 160:
+                break
+        logger.info(f"Feodo Tracker: {len(ips) - before} IPs added.")
+    except Exception as e:
+        logger.warning(f"Feodo Tracker failed: {str(e)[:100]}")
+
+    # Source 3 — URLhaus malware delivery IPs
+    try:
+        logger.info("Fetching from URLhaus...")
+        before = len(ips)
+        response = requests.get(
+            "https://urlhaus.abuse.ch/downloads/csv_recent/",
+            timeout=15
+        )
+        response.raise_for_status()
+        for line in response.text.splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            parts = line.split(",")
+            if len(parts) < 3:
+                continue
+            url = parts[2].strip().strip('"')
+            try:
+                host = urlparse(url).hostname
+                if host and host[0].isdigit() and host not in ips:
+                    ips.append(host)
+            except Exception:
+                continue
             if len(ips) >= MALICIOUS_SAMPLE_SIZE:
                 break
-
-        logger.info(f"Collected {len(ips)} malicious IPs from ThreatFox.")
-        return ips
-
+        logger.info(f"URLhaus: {len(ips) - before} IPs added.")
     except Exception as e:
-        logger.error(f"Failed to fetch from ThreatFox: {str(e)[:100]}")
-        return []
-    
+        logger.warning(f"URLhaus failed: {str(e)[:100]}")
+
+    ips = list(dict.fromkeys(ips))[:MALICIOUS_SAMPLE_SIZE]
+    logger.info(f"Total malicious IPs collected: {len(ips)}")
+    return ips
+
+
 def fetch_benign_ips() -> list:
     """
-    Returns a list of known clean IPs from major
-    public infrastructure providers.
+    Returns a diverse set of benign IPs including obvious clean
+    infrastructure, Tor exit nodes, and shared hosting to create
+    a more realistic and challenging training set.
     """
-    logger.info("Loading known benign IPs...")
+    logger.info("Fetching benign IPs from multiple sources...")
 
-    benign_ips = [
-        # Google
-        "8.8.8.8", "8.8.4.4", "142.250.80.46",
-        "172.217.10.46", "216.58.194.46",
-        # Cloudflare
-        "1.1.1.1", "1.0.0.1", "104.16.132.229",
-        "104.17.10.12", "104.21.10.1",
-        # Microsoft
-        "13.107.42.14", "40.76.4.15", "40.112.72.205",
-        "52.96.220.109", "104.40.211.35",
-        # Amazon AWS
-        "52.94.236.248", "54.239.28.85", "205.251.196.1",
-        "54.231.0.1", "52.216.0.1",
-        # Akamai
-        "23.32.3.72", "23.48.0.1", "95.100.0.1",
-        "184.50.0.1", "2.16.0.1",
-        # Fastly CDN
-        "151.101.0.1", "151.101.64.1", "151.101.128.1",
-        "151.101.192.1", "199.232.0.1",
-        # OpenDNS
-        "208.67.222.222", "208.67.220.220",
-        # Quad9
-        "9.9.9.9", "149.112.112.112",
-        # Level3
-        "209.244.0.3", "209.244.0.4",
-        # Verisign
-        "64.6.64.6", "64.6.65.6",
+    benign_ips = []
+
+    # Anchor IPs — obvious benign infrastructure
+    anchors = [
+        "8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1",
+        "9.9.9.9", "149.112.112.112", "208.67.222.222",
+        "208.67.220.220", "209.244.0.3", "64.6.64.6",
     ]
+    benign_ips.extend(anchors)
 
-    # Pad to target sample size with variations
+    # Tor exit nodes — look suspicious but are benign infrastructure
+    try:
+        logger.info("Fetching Tor exit node list...")
+        response = requests.get(
+            "https://check.torproject.org/torbulkexitlist",
+            timeout=15
+        )
+        if response.status_code == 200:
+            tor_ips = [
+                line.strip() for line in response.text.splitlines()
+                if line.strip() and not line.startswith("#")
+            ]
+            random.shuffle(tor_ips)
+            benign_ips.extend(tor_ips[:60])
+            logger.info(f"Added {min(60, len(tor_ips))} Tor exit nodes.")
+    except Exception as e:
+        logger.warning(f"Could not fetch Tor list: {str(e)[:100]}")
+
+    # Shared hosting IPs — mixed reputation, ambiguous
+    shared_hosting = [
+        "198.54.117.197", "198.54.117.198", "198.54.117.199",
+        "198.54.117.200", "198.54.117.201",
+        "162.241.224.4", "162.241.224.5", "162.241.224.6",
+        "192.185.25.1", "192.185.25.2", "192.185.25.3",
+        "160.153.128.10", "160.153.128.11", "160.153.128.12",
+        "193.169.145.20", "193.169.145.21", "193.169.145.22",
+    ]
+    benign_ips.extend(shared_hosting)
+
+    # Academic and government infrastructure
+    academic = [
+        "128.112.136.11", "18.7.22.69", "171.67.215.200",
+        "169.229.131.81", "128.95.155.135", "192.20.225.10",
+        "199.43.135.53", "192.5.6.30",
+    ]
+    benign_ips.extend(academic)
+
+    benign_ips = list(dict.fromkeys(benign_ips))
+
     while len(benign_ips) < BENIGN_SAMPLE_SIZE:
         benign_ips.extend(benign_ips[:BENIGN_SAMPLE_SIZE - len(benign_ips)])
 
     result = benign_ips[:BENIGN_SAMPLE_SIZE]
-    logger.info(f"Loaded {len(result)} benign IPs.")
+    logger.info(f"Collected {len(result)} diverse benign IPs.")
     return result
+
 
 def collect_features(ips: list, label: int) -> list:
     """
@@ -132,6 +216,7 @@ def collect_features(ips: list, label: int) -> list:
 
     return samples
 
+
 def main():
     """
     Orchestrates the data collection pipeline.
@@ -152,9 +237,14 @@ def main():
     df = pd.DataFrame(all_samples)
     df = df.fillna(0)
 
+    if os.path.exists(OUTPUT_PATH):
+        existing = pd.read_csv(OUTPUT_PATH)
+        df = pd.concat([existing, df], ignore_index=True).drop_duplicates()
+        logger.info(f"Appended to existing dataset. Total samples: {len(df)}")
+
     df.to_csv(OUTPUT_PATH, index=False)
     logger.info(f"Saved {len(df)} samples to {OUTPUT_PATH}")
     logger.info(f"Malicious: {len(malicious_samples)} | Benign: {len(benign_samples)}")
 
-if __name__ == "__main__":
-    main()
+
+main()

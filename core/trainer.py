@@ -118,7 +118,11 @@ def train_models():
             max_depth=3,
             random_state=42
         )
-        gb_model.fit(X_train, y_train)
+
+        # Compute class weights to compensate for imbalanced dataset
+        from sklearn.utils.class_weight import compute_sample_weight
+        sample_weights = compute_sample_weight(class_weight="balanced", y=y_train)
+        gb_model.fit(X_train, y_train, sample_weight=sample_weights)
 
         y_pred = gb_model.predict(X_test)
         y_prob = gb_model.predict_proba(X_test)[:, 1]
