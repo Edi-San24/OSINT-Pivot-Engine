@@ -1,10 +1,12 @@
 # core/agent.py
-# LangGraph AI agent for the OSINT Pivot Engine.
-# Autonomously decides which sources to query, analyzes results,
-# and determines whether to continue pivoting based on findings.
+# LangGraph agent for the OSINT Pivot Engine.
+# Orchestrates the pivot chain, scoring, NER extraction, and summarization.
+
+
 
 import json
 import logging
+import re
  
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
@@ -26,7 +28,7 @@ logger = logging.getLogger(__name__)
  
 # Global instances
 llm = ChatAnthropic(
-    model="claude-opus-5",
+    model="claude-fable-5",
     api_key=ANTHROPIC_API_KEY,
 )
  
@@ -41,10 +43,10 @@ class AgentState(TypedDict):
     seed: str
     current_seed: str
     indicator_type: str
-    pivot_results: list
-    pivot_queue: list
-    visited: list
-    findings: list
+    pivot_results: list[dict]
+    pivot_queue: list[str]
+    visited: list[str]
+    findings: list[str]
     should_continue: bool
     ml_score: float
     context_score: float
@@ -55,26 +57,32 @@ class AgentState(TypedDict):
  
  
 def is_ipv4(value: str) -> bool:
-    import re
     return bool(re.match(r"^(\d{1,3}\.){3}\d{1,3}$", value))
  
  
 def is_domain(value: str) -> bool:
-    import re
     return bool(re.match(
         r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$",
         value
     ))
  
  
-def extract_new_indicators(result: dict, visited: list) -> list:
+def safe_json(obj: object, limit: int = 0) -> str:
+    """Serializes an object to JSON string with optional character limit."""
+    result = json.dumps(obj, indent=2, default=str)
+    if limit > 0:
+        return result[:limit]
+    return result
+ 
+ 
+def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
     """
     Extracts new pivotable indicators from a completed pivot result.
     For domains: extracts IPs from PassiveDNS and subdomains from crt.sh.
     For IPs: extracts domains from PassiveDNS records.
     For hashes: extracts related SHA256 hashes from MalwareBazaar tag results.
     """
-    new_indicators = []
+    new_indicators: list[str] = []
     indicator_type = result.get("type", "")
     results = result.get("results", {})
  
@@ -116,8 +124,8 @@ def extract_new_indicators(result: dict, visited: list) -> list:
         if actor not in new_indicators:
             new_indicators.append(actor)
  
-    seen = set()
-    clean = []
+    seen: set[str] = set()
+    clean: list[str] = []
     for ind in new_indicators:
         if ind not in visited and ind not in seen:
             seen.add(ind)
@@ -150,6 +158,31 @@ def run_pivot(state: AgentState) -> AgentState:
     return state
  
  
+def _parse_llm_json(content: object) -> dict:
+    """
+    Extracts and parses JSON from an LLM response.
+    Handles list content blocks, markdown fences, and empty responses.
+    Returns parsed dict or raises ValueError if unparseable.
+    """
+    if isinstance(content, list):
+        content = content[0].get("text", "") if content else ""
+ 
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("Empty response from LLM")
+ 
+    text = content.strip()
+ 
+    # Strip markdown fences
+    if text.startswith("```"):
+        parts = text.split("```")
+        text = parts[1] if len(parts) > 1 else text
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+ 
+    return json.loads(text)
+ 
+ 
 def analyze_results(state: AgentState) -> AgentState:
     """
     Uses Claude to analyze pivot results and determine
@@ -159,66 +192,67 @@ def analyze_results(state: AgentState) -> AgentState:
     logger.info("Agent analyzing pivot results...")
  
     latest_result = state["pivot_results"][-1]
+    result_str = safe_json(latest_result, limit=4000)
  
-    system_prompt = """You are an expert cyber threat intelligence analyst.
-You will be given OSINT pivot results for a seed indicator.
-Your job is to:
-1. Identify any suspicious or notable findings
-2. Determine whether further pivoting is warranted
-3. List specific findings as short bullet points
+    system_prompt = (
+        "You are an expert cyber threat intelligence analyst.\n"
+        "You will be given OSINT pivot results for a seed indicator.\n\n"
+        "You MUST respond with ONLY a valid JSON object. No preamble, no explanation, no markdown.\n"
+        "The response must start with { and end with }.\n\n"
+        'Required format:\n{"findings": ["finding 1", "finding 2"], "should_continue": true, "reason": "brief explanation"}\n\n'
+        "Rules:\n"
+        "- findings: list of strings, each a specific notable finding from the data\n"
+        "- should_continue: boolean, true if more pivoting would yield useful intelligence\n"
+        "- reason: one sentence explaining your decision"
+    )
  
-Respond in JSON format only. Do not wrap your response in markdown code blocks. Return raw JSON only:
-{
-    "findings": ["finding 1", "finding 2"],
-    "should_continue": true or false,
-    "reason": "brief explanation of your decision"
-}"""
+    user_message = (
+        "Analyze these OSINT pivot results:\n\n"
+        f"Indicator: {state['current_seed']}\n"
+        f"Type: {state['indicator_type']}\n"
+        f"Pivot count: {state['pivot_count']}\n"
+        f"Max allowed pivots: {config.MAX_PIVOT_DEPTH}\n"
+        f"Indicators in queue: {len(state['pivot_queue'])}\n\n"
+        f"Results:\n{result_str}"
+    )
  
-    user_message = f"""Analyze these OSINT pivot results:
- 
-Indicator: {state['current_seed']}
-Type: {state['indicator_type']}
-Pivot count: {state['pivot_count']}
-Max allowed pivots: {config.MAX_PIVOT_DEPTH}
-Indicators in queue: {len(state['pivot_queue'])}
- 
-Results:
-{json.dumps(latest_result, indent=2, default=str)}"""
- 
-    response = llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_message)
-    ])
+    parse_succeeded = False
  
     try:
-        content = response.content
-        if isinstance(content, list):
-            content = content[0].get("text", "") if content else ""
- 
-        content = content.strip()
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-            content = content.strip()
- 
-        analysis = json.loads(content)
+        response = llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_message)
+        ])
+        analysis = _parse_llm_json(response.content)
         state["findings"].extend(analysis.get("findings", []))
         state["should_continue"] = analysis.get("should_continue", False)
         logger.info(f"Analysis complete. Continue: {state['should_continue']}")
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse LLM response as JSON: {e} | Raw: {content[:200]}")
-        # Don't stop — keep going if there are indicators in the queue
-        state["should_continue"] = len(state["pivot_queue"]) > 0
+        parse_succeeded = True
+ 
+    except Exception:
+        # Retry with minimal prompt
+        try:
+            retry_result_str = safe_json(latest_result, limit=2000)
+            retry_response = llm.invoke([
+                SystemMessage(content='Respond with ONLY valid JSON. Format: {"findings": [], "should_continue": false, "reason": ""}'),
+                HumanMessage(content=f"Analyze this and return JSON only:\n{retry_result_str}")
+            ])
+            analysis = _parse_llm_json(retry_response.content)
+            state["findings"].extend(analysis.get("findings", []))
+            state["should_continue"] = analysis.get("should_continue", False)
+            parse_succeeded = True
+            logger.info("Analyze retry succeeded.")
+        except Exception:
+            logger.info("analyze_results: using fallback, continuing based on queue.")
+            state["should_continue"] = len(state["pivot_queue"]) > 0
  
     # NER — scan latest pivot result for threat actor mentions and queue them
-    if state["pivot_results"]:
-        latest = state["pivot_results"][-1]
-        actors = ner_extractor.extract_threat_actors(latest, state["visited"])
-        for actor in actors:
-            if actor not in state["pivot_queue"] and actor not in state["visited"]:
-                state["pivot_queue"].append(actor)
-                logger.info(f"NER queued threat actor: {actor}")
+    latest = state["pivot_results"][-1]
+    actors = ner_extractor.extract_threat_actors(latest, state["visited"])
+    for actor in actors:
+        if actor not in state["pivot_queue"] and actor not in state["visited"]:
+            state["pivot_queue"].append(actor)
+            logger.info(f"NER queued threat actor: {actor}")
  
     # If queue is empty, stop regardless of what the LLM decided
     if not state["pivot_queue"]:
@@ -290,7 +324,7 @@ def apply_context(state: AgentState) -> AgentState:
             "EARLY WARNING: Related malware samples detected within the last 7 days — active campaign signal."
         )
  
-    logger.info(f"ML score: {blended_score} | Graph: {graph_score} | Temporal: {temporal_score} | Context: {context_score}")
+    logger.info(f"ML: {blended_score} | Graph: {graph_score} | Temporal: {temporal_score} | Context: {context_score}")
  
     return state
  
@@ -304,44 +338,40 @@ def summarize(state: AgentState) -> AgentState:
     """
     logger.info("Agent generating final summary...")
  
-    system_prompt = """You are an expert cyber threat intelligence analyst reviewing OSINT pivot results.
+    findings_str = safe_json(state["findings"])
+    results_str = safe_json(state["pivot_results"])
  
-Produce a structured investigation summary using exactly this format:
+    system_prompt = (
+        "You are an expert cyber threat intelligence analyst reviewing OSINT pivot results.\n\n"
+        "Produce a structured investigation summary using exactly this format:\n\n"
+        "THREAT LEVEL: [HIGH / MEDIUM / LOW / UNKNOWN] — [one sentence verdict]\n\n"
+        "ASSESSMENT:\n"
+        "[2-3 sentences covering what was found and what it means. Be specific to the actual data.]\n\n"
+        "KEY INDICATORS:\n"
+        "- [Specific finding 1]\n"
+        "- [Specific finding 2]\n"
+        "- [Specific finding 3 if applicable]\n\n"
+        "VISIBILITY GAPS:\n"
+        "[One sentence on what sources failed or returned no data.]\n\n"
+        "RECOMMENDED ACTIONS:\n"
+        "1. [Specific action]\n"
+        "2. [Specific action]\n"
+        "3. [Specific action if applicable]\n\n"
+        "Write for a SOC analyst making a fast decision. Never fabricate data not in the results. "
+        "If a source errored, acknowledge the gap. No markdown headers with # symbols. No bold with **."
+    )
  
-THREAT LEVEL: [HIGH / MEDIUM / LOW / UNKNOWN] — [one sentence verdict]
- 
-ASSESSMENT:
-[2-3 sentences covering what was found and what it means. Be specific to the actual data.]
- 
-KEY INDICATORS:
-- [Specific finding 1]
-- [Specific finding 2]
-- [Specific finding 3 if applicable]
- 
-VISIBILITY GAPS:
-[One sentence on what sources failed or returned no data.]
- 
-RECOMMENDED ACTIONS:
-1. [Specific action]
-2. [Specific action]
-3. [Specific action if applicable]
- 
-Write for a SOC analyst making a fast decision. Never fabricate data not in the results. If a source errored, acknowledge the gap. No markdown headers with # symbols. No bold with **."""
- 
-    user_message = f"""Write an investigation summary for:
- 
-Seed Indicator: {state['seed']}
-Indicators investigated: {state['visited']}
-Pivots run: {state['pivot_count']}
-ML Score: {state['ml_score']}
-Context Score: {state['context_score']}
-Infrastructure Type: {state['infrastructure_type']}
- 
-Key findings:
-{json.dumps(state['findings'], indent=2)}
- 
-Full results:
-{json.dumps(state['pivot_results'], indent=2, default=str)}"""
+    user_message = (
+        "Write an investigation summary for:\n\n"
+        f"Seed Indicator: {state['seed']}\n"
+        f"Indicators investigated: {state['visited']}\n"
+        f"Pivots run: {state['pivot_count']}\n"
+        f"ML Score: {state['ml_score']}\n"
+        f"Context Score: {state['context_score']}\n"
+        f"Infrastructure Type: {state['infrastructure_type']}\n\n"
+        f"Key findings:\n{findings_str}\n\n"
+        f"Full results:\n{results_str}"
+    )
  
     response = llm.invoke([
         SystemMessage(content=system_prompt),
@@ -355,10 +385,10 @@ Full results:
                 content = block.get("text", "")
                 break
  
-    state["summary"] = content
+    state["summary"] = content if isinstance(content, str) else ""
  
     # NER — scan summary text for threat actor mentions
-    summary_pseudo_result = {"results": {"ahmia": {"results": [{"snippet": content}]}}}
+    summary_pseudo_result = {"results": {"ahmia": {"results": [{"snippet": state["summary"]}]}}}
     actors_found = ner_extractor.extract_threat_actors(summary_pseudo_result, state["visited"])
     if actors_found:
         note = f"Threat actors mentioned in summary (recommend follow-up pivots): {', '.join(actors_found)}"
@@ -367,7 +397,7 @@ Full results:
  
     state["context_note"] = (
         f"Infrastructure identified as {state['infrastructure_type']}."
-        if state['infrastructure_type'] != "unknown"
+        if state["infrastructure_type"] != "unknown"
         else ""
     )
  

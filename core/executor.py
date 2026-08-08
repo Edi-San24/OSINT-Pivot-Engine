@@ -15,6 +15,7 @@ from connectors.passivedns import PassiveDNSConnector
 from connectors.onion import OnionConnector
 from connectors.mitre import MITREConnector
 from connectors.bazaar import MalwareBazaarConnector
+from connectors.spiderfoot import SpiderFootConnector
 
 # Logging configuration
 logging.basicConfig(
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 RATE_LIMIT_DELAY = 1.0
 REQUEST_TIMEOUT = 10
-ALLOWED_TYPES = {"ipv4", "domain", "md5", "sha1", "sha256", "email", "username", "threat_group"}
+ALLOWED_TYPES = {"ipv4", "domain", "md5", "sha1", "sha256", "email", "username", "threat_group","software"}
 
 class PivotExecutor:
     """
@@ -43,6 +44,7 @@ class PivotExecutor:
         self.ahmia = OnionConnector()
         self.mitre = MITREConnector()
         self.bazaar = MalwareBazaarConnector()
+        self.spiderfoot = SpiderFootConnector()
         logger.info("Pivot initialized!")
 
     def validate(self, seed: str) -> dict:
@@ -165,6 +167,70 @@ class PivotExecutor:
             "results": results
         }
 
+    def pivot_software(self, name: str) -> dict:
+        """
+        Queries MalwareBazaar for live samples matching a malware family name.
+        Called when MITRE returns associated software for a threat group,
+        turning attribution data into active infrastructure discovery.
+        """
+        logger.info(f"Starting software pivot for: {name[:50]}")
+        results = {}
+
+        try:
+            logger.info("Querying MalwareBazaar by signature...")
+            results["malwarebazaar"] = self.bazaar.query_signature(name)
+
+        except Exception as e:
+            logger.error(f"Error during software pivot: {str(e)[:100]}")
+
+        return {
+            "indicator": name,
+            "type": "software",
+            "results": results
+        }
+
+    def pivot_email(self, email: str) -> dict:
+        """
+        Queries SpiderFoot for email address intelligence.
+        Surfaces breach exposure, associated domains, and social accounts.
+        Requires SpiderFoot running locally on port 5001.
+        """
+        logger.info(f"Starting email pivot for: {email[:50]}")
+        results = {}
+
+        try:
+            logger.info("Querying SpiderFoot...")
+            results["spiderfoot"] = self.spiderfoot.query_email(email)
+        except Exception as e:
+            logger.error(f"Error during email pivot: {str(e)[:100]}")
+
+        return {
+            "indicator": email,
+            "type": "email",
+            "results": results
+        }
+
+    def pivot_username(self, username: str) -> dict:
+        """
+        Queries SpiderFoot for username intelligence.
+        Surfaces cross-platform presence and linked accounts.
+        Requires SpiderFoot running locally on port 5001.
+        """
+        logger.info(f"Starting username pivot for: {username[:50]}")
+        results = {}
+
+        try:
+            logger.info("Querying SpiderFoot...")
+            results["spiderfoot"] = self.spiderfoot.query_username(username)
+        except Exception as e:
+            logger.error(f"Error during username pivot: {str(e)[:100]}")
+
+        return {
+            "indicator": username,
+            "type": "username",
+            "results": results
+        }
+
     def pivot_filename(self, filename: str) -> dict:
         """
         Queries VirusTotal and MalwareBazaar for samples matching a given filename.
@@ -190,7 +256,6 @@ class PivotExecutor:
             "results": results
         }
 
-
     def run(self, seed: str) -> dict:
         validation = self.validate(seed)
         if not validation["valid"]:
@@ -207,6 +272,11 @@ class PivotExecutor:
             return self.pivot_group(indicator)
         elif indicator_type == "filename":
             return self.pivot_filename(indicator)
+        elif indicator_type == "software":
+            return self.pivot_software(indicator)
+        elif indicator_type == "email":
+            return self.pivot_email(indicator)
+        elif indicator_type == "username":
+            return self.pivot_username(indicator)
         else:
             return {"error": f"No pivot chain defined for type {indicator_type}", "indicator": indicator}
-       

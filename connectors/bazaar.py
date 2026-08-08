@@ -168,3 +168,54 @@ class MalwareBazaarConnector:
         except Exception as e:
             logger.error(f"MalwareBazaar tag query failed for '{tag}': {str(e)}")
             return {"error": str(e), "indicator": tag, "source": "malwarebazaar"}
+
+    def query_signature(self, signature: str) -> dict:
+        """
+        Queries MalwareBazaar for samples matching a malware family signature.
+        Useful for threat group pivots — finds live samples associated with
+        known group tooling (e.g. HOPLIGHT, BLINDINGCAN, FASTCash).
+        """
+        try:
+            response = requests.post(
+                self.BASE_URL,
+                data={"query": "get_siginfo", "signature": signature, "limit": 10},
+                headers=self.headers,
+                timeout=15
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get("query_status") != "ok":
+                return {
+                    "indicator": signature,
+                    "type": "signature",
+                    "source": "malwarebazaar",
+                    "found": False,
+                    "reason": data.get("query_status", "unknown")
+                }
+
+            samples = data.get("data", [])[:10]
+
+            return {
+                "indicator": signature,
+                "type": "signature",
+                "source": "malwarebazaar",
+                "found": True,
+                "sample_count": len(samples),
+                "samples": [
+                    {
+                        "sha256": s.get("sha256_hash", "unknown"),
+                        "file_name": s.get("file_name", "unknown"),
+                        "malware_family": s.get("signature", "unknown"),
+                        "tags": s.get("tags", []),
+                        "first_seen": s.get("first_seen", "unknown"),
+                        "last_seen": s.get("last_seen", "unknown"),
+                        "delivery_method": s.get("delivery_method", "unknown"),
+                    }
+                    for s in samples
+                ]
+            }
+
+        except Exception as e:
+            logger.error(f"MalwareBazaar signature query failed for '{signature}': {str(e)}")
+            return {"error": str(e), "indicator": signature, "source": "malwarebazaar"}
