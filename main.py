@@ -2,12 +2,14 @@
 # CLI entry point for project
 
 
+
 import click
 import json
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich import box
 from core.agent import run_agent
 from core.stix_exporter import STIXExporter
@@ -65,11 +67,12 @@ def format_summary(summary) -> Text:
             text.append(line + "\n")
  
     return text
-
+ 
+ 
 def extract_threat_level(summary: str) -> str | None:
     """
-    Extracts the -THREAT LEVEL- from the structured summary.
-    Returns HIGH, MEDIUM, LOW, or None if not found...
+    Extracts the THREAT LEVEL from the structured summary.
+    Returns HIGH, MEDIUM, LOW, or None if not found.
     """
     if not isinstance(summary, str):
         return None
@@ -78,8 +81,7 @@ def extract_threat_level(summary: str) -> str | None:
             for level in ["HIGH", "MEDIUM", "LOW"]:
                 if level in line.upper():
                     return level
-
-    return None 
+    return None
  
  
 @click.command()
@@ -87,7 +89,8 @@ def extract_threat_level(summary: str) -> str | None:
 @click.option("--output", default=None, help="Save full results to a JSON file")
 @click.option("--depth", default=None, type=int, help="Override max pivot depth")
 @click.option("--export-stix", default=None, help="Export investigation as STIX 2.1 bundle to given path")
-def run(seed, output, depth, export_stix):
+@click.option("--deep", is_flag=True, default=False, help="Enable SpiderFoot for email and username pivots")
+def run(seed, output, depth, export_stix, deep):
     """OSINT Pivot Engine — autonomous threat intelligence enrichment tool."""
  
     if depth:
@@ -103,8 +106,16 @@ def run(seed, output, depth, export_stix):
     )
     console.print(banner)
  
-    with console.status("[bold cyan]Launching AI agent...[/bold cyan]", spinner="dots"):
-        result = run_agent(seed)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Running pivot chain...", total=None)
+        result = run_agent(seed, deep=deep)
+        progress.update(task, description="Investigation complete.")
  
     risk_level = get_context_score_risk(result['context_score'])
     agent_level = extract_threat_level(result['summary'] if isinstance(result['summary'], str) else "")
@@ -126,13 +137,13 @@ def run(seed, output, depth, export_stix):
     if result['context_note']:
         table.add_row("Note", f"[dim]{result['context_note']}[/dim]")
  
-    # Check for early warning in findings
+    # Early warning
     early_warnings = [f for f in result['findings'] if "EARLY WARNING" in f]
     if early_warnings:
         table.add_row("", "")
         table.add_row("[bold red]EARLY WARNING[/bold red]", f"[red]{early_warnings[0]}[/red]")
  
-    # Check for NER actor recommendations in findings
+    # NER actor recommendations
     ner_notes = [f for f in result['findings'] if "Threat actors mentioned" in f]
     if ner_notes:
         table.add_row("[bold yellow]NER[/bold yellow]", f"[yellow]{ner_notes[0]}[/yellow]")

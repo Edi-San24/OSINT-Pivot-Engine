@@ -54,6 +54,7 @@ class AgentState(TypedDict):
     context_note: str
     summary: str
     pivot_count: int
+    deep: bool
  
  
 def is_ipv4(value: str) -> bool:
@@ -142,7 +143,7 @@ def run_pivot(state: AgentState) -> AgentState:
     current = state["current_seed"]
     logger.info(f"Agent running pivot for: {current}")
  
-    result = executor.run(current)
+    result = executor.run(current, deep=state["deep"])
  
     state["pivot_results"].append(result)
     state["pivot_count"] += 1
@@ -413,7 +414,7 @@ def should_continue_pivot(state: AgentState) -> str:
     return "summarize"
  
  
-def run_agent(seed: str) -> dict:
+def run_agent(seed: str, deep: bool = False) -> dict:
     """
     Entry point for the OSINT Pivot Engine agent.
     Initializes state and runs the full LangGraph pipeline.
@@ -436,6 +437,7 @@ def run_agent(seed: str) -> dict:
         "context_note": "",
         "summary": "",
         "pivot_count": 0,
+        "deep": deep,
     }
  
     graph = StateGraph(AgentState)
