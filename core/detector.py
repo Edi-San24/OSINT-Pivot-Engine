@@ -18,7 +18,7 @@ KNOWN_MALWARE_FAMILIES = {
     "wannacry", "lockbit", "ryuk", "conti", "darkside", "revil",
     "blackcat", "alphv", "magniber", "hive", "blackbasta", "akira",
     "cl0p", "medusa", "play", "royal", "rhysida", "hunters",
-    "dark angels", "genielocker", "ransomexx",
+    "dark angels", "genielocker", "ransomexx", "qilin", "agenda ransomware",
 
     # Loaders and droppers
     "emotet", "trickbot", "qakbot", "icedid", "bazarloader",
