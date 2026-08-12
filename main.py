@@ -2,7 +2,6 @@
 # CLI entry point for project
 
 
-
 import click
 import json
 from rich.console import Console
@@ -118,9 +117,14 @@ def run(seed, output, depth, export_stix, deep):
         progress.update(task, description="Investigation complete.")
  
     risk_level = get_context_score_risk(result['context_score'])
-    agent_level = extract_threat_level(result['summary'] if isinstance(result['summary'], str) else "")
-    if agent_level:
-        risk_level = agent_level
+ 
+    # Only let the agent override the risk level for infrastructure pivots.
+    # Threat groups, software, and identity pivots use the scorer directly.
+    if result.get('indicator_type', '') not in {"threat_group", "software", "email", "username", "filename"}:
+        agent_level = extract_threat_level(result['summary'] if isinstance(result['summary'], str) else "")
+        if agent_level:
+            risk_level = agent_level
+ 
     risk_color = get_risk_color(risk_level)
  
     table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))

@@ -292,16 +292,14 @@ def apply_context(state: AgentState) -> AgentState:
     pivot_result = state["pivot_results"][0]
     indicator_type = pivot_result.get("type", "")
  
-    if indicator_type == "threat_group":
-        raw = scorer.score_threat_group(pivot_result)
-        ml_score = raw.get("confidence_score", 0.0)
+    raw = scorer.score_any(pivot_result)
+    ml_score = raw.get("confidence_score", 0.0)
+ 
+    if indicator_type in {"threat_group", "software", "email", "username", "filename"}:
         graph_score = 0.0
         temporal_score = 0.0
         early_warning = False
     else:
-        raw = scorer.score(pivot_result)
-        ml_score = raw.get("confidence_score", 0.0)
- 
         graph_scores = graph_scorer.score_all(state["pivot_results"])
         graph_score = graph_scores.get(state["seed"], 0.0)
  
@@ -309,8 +307,11 @@ def apply_context(state: AgentState) -> AgentState:
         temporal_score = temporal_result.get("temporal_score", 0.0)
         early_warning = temporal_result.get("early_warning", False)
  
-    blended_score = graph_scorer.blend_scores(ml_score, graph_score)
-    blended_score = temporal_scorer.blend_with_ml(blended_score, temporal_score)
+    if indicator_type in {"threat_group", "software", "email", "username", "filename"}:
+        blended_score = ml_score
+    else:
+        blended_score = graph_scorer.blend_scores(ml_score, graph_score)
+        blended_score = temporal_scorer.blend_with_ml(blended_score, temporal_score)
  
     context = detect_infrastructure_type(pivot_result)
     modifier = context.get("confidence_modifier", 0.0)
@@ -466,8 +467,10 @@ def run_agent(seed: str, deep: bool = False) -> dict:
         "ml_score": final_state["ml_score"],
         "context_score": final_state["context_score"],
         "infrastructure_type": final_state["infrastructure_type"],
+        "indicator_type": final_state["indicator_type"],
         "context_note": final_state["context_note"],
         "full_results": final_state["pivot_results"],
         "visited": final_state["visited"],
         "indicator": seed,
     }
+ 
