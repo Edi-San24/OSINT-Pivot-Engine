@@ -27,6 +27,14 @@ def detect_infrastructure_type(pivot_result: dict) -> dict:
     Analyzes pivot results to identify known infrastructure types that
     require confidence score adjustment.
     """
+    if pivot_result.get("type") in {"hash", "md5", "sha1", "sha256"}:
+        return {
+        "is_tor_exit": False,
+        "is_cdn": False,
+        "is_shared_hosting": False,
+        "infrastructure_type": "malware_sample",
+        "confidence_modifier": 0.0
+    }
     results = pivot_result.get("results", {})
     context = {
         "is_tor_exit": False,
