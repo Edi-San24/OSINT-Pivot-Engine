@@ -12,6 +12,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich import box
 from core.agent import run_agent
 from core.stix_exporter import STIXExporter
+from core.risk import resolve_risk_level
  
 console = Console()
  
@@ -23,15 +24,6 @@ def get_risk_color(risk_level: str) -> str:
         return "bold yellow"
     else:
         return "bold green"
- 
- 
-def get_context_score_risk(score: float) -> str:
-    if score >= 0.7:
-        return "HIGH"
-    elif score >= 0.4:
-        return "MEDIUM"
-    else:
-        return "LOW"
  
  
 def format_summary(summary) -> Text:
@@ -68,21 +60,6 @@ def format_summary(summary) -> Text:
     return text
  
  
-def extract_threat_level(summary: str) -> str | None:
-    """
-    Extracts the THREAT LEVEL from the structured summary.
-    Returns HIGH, MEDIUM, LOW, or None if not found.
-    """
-    if not isinstance(summary, str):
-        return None
-    for line in summary.split("\n"):
-        if line.strip().startswith("THREAT LEVEL:"):
-            for level in ["HIGH", "MEDIUM", "LOW"]:
-                if level in line.upper():
-                    return level
-    return None
- 
- 
 @click.command()
 @click.option("--seed", required=True, help="The indicator to investigate (IP, domain, hash, email, or username)")
 @click.option("--output", default=None, help="Save full results to a JSON file")
@@ -116,15 +93,7 @@ def run(seed, output, depth, export_stix, deep):
         result = run_agent(seed, deep=deep)
         progress.update(task, description="Investigation complete.")
  
-    risk_level = get_context_score_risk(result['context_score'])
- 
-    # Only let the agent override the risk level for infrastructure pivots.
-    # Threat groups, software, and identity pivots use the scorer directly.
-    if result.get('indicator_type', '') not in {"threat_group", "software", "email", "username", "filename"}:
-        agent_level = extract_threat_level(result['summary'] if isinstance(result['summary'], str) else "")
-        if agent_level:
-            risk_level = agent_level
- 
+    risk_level = resolve_risk_level(result)
     risk_color = get_risk_color(risk_level)
  
     table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
