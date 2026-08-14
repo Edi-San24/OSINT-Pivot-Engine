@@ -18,6 +18,8 @@ from connectors.onion import OnionConnector
 from connectors.mitre import MITREConnector
 from connectors.bazaar import MalwareBazaarConnector
 from connectors.spiderfoot import SpiderFootConnector
+from connectors.urlhaus import URLhausConnector
+from connectors.otx import OTXConnector
  
 logging.basicConfig(
     level=logging.ERROR,
@@ -67,6 +69,8 @@ class PivotExecutor:
         self.mitre = MITREConnector()
         self.bazaar = MalwareBazaarConnector()
         self.spiderfoot = SpiderFootConnector()
+        self.urlhaus = URLhausConnector()
+        self.otx = OTXConnector()
         logger.info("Pivot executor initialized.")
  
     def validate(self, seed: str) -> dict:
@@ -95,6 +99,8 @@ class PivotExecutor:
             "passivedns": lambda: self.passivedns.query_ip(ip),
             "censys": lambda: self.censys.query_ip(ip),
             "ahmia": lambda: self.ahmia.search(ip),
+            "urlhaus": lambda: self.urlhaus.query_host(ip),
+            "otx": lambda: self.otx.query_indicator(ip, "IPv4"),
         }
  
         results = _run_parallel(tasks)
@@ -113,6 +119,8 @@ class PivotExecutor:
             "passivedns": lambda: self.passivedns.query_domain(domain),
             "censys": lambda: self.censys.query_domain_certificates(domain),
             "ahmia": lambda: self.ahmia.search(domain),
+            "urlhaus": lambda: self.urlhaus.query_host(domain),
+            "otx": lambda: self.otx.query_indicator(domain, "domain"),
         }
  
         results = _run_parallel(tasks)
@@ -138,12 +146,21 @@ class PivotExecutor:
  
             vt_result = results.get("virustotal", {})
             bazaar_result = results.get("malwarebazaar", {})
+
+            # OTX enrichment — detect hash type from length
+            hash_type = "FileHash-MD5" if len(hash_val) == 32 else "FileHash-SHA1" if len(hash_val) == 40 else "FileHash-SHA256"
+            results["otx"] = self.otx.query_indicator(hash_val, hash_type)
  
             # Chain into related samples via malware family tag
             malware_tag = bazaar_result.get("malware_family") if isinstance(bazaar_result, dict) else None
             if malware_tag and bazaar_result.get("found"):
                 logger.info(f"Querying MalwareBazaar for related samples by tag: {malware_tag}")
                 results["malwarebazaar_related"] = self.bazaar.query_tag(malware_tag)
+
+            # URLhaus enrichment using Bazaar malware family tag
+            if malware_tag and bazaar_result.get("found"):
+                logger.info(f"Querying URLhaus for delivery URLs: {malware_tag}")
+                results["urlhaus"] = self.urlhaus.query_malware_family(malware_tag)
  
             # MITRE enrichment using VT malware family name
             malware_name = vt_result.get("malware_family") if isinstance(vt_result, dict) else None

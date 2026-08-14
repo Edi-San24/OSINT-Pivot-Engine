@@ -18,6 +18,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 THREATFOX_API_KEY = os.getenv("THREATFOX_API_KEY", "")
 WHOISXML_API_KEY = os.getenv("WHOISXML_API_KEY", "")
 MALWAREBAZAAR_API_KEY = os.getenv("THREATFOX_API_KEY")
+OTX_API_KEY = os.getenv("OTX_API_KEY")
 
 #Agent settings
 MAX_PIVOT_DEPTH = 3 # Amount of pivots the agent can make 
