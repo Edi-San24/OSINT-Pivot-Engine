@@ -1,0 +1,11 @@
+# OSINT Pivot Engine — training and experiment tracking
+#
+# Only needed to retrain the scoring models (core/trainer.py) or collect new
+# labelled data (scripts/collect_training_data.py). Running an investigation
+# does not require anything here.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+
+-r requirements.txt
+
+mlflow==3.14.0

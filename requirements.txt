@@ -1,0 +1,40 @@
+# OSINT Pivot Engine — runtime dependencies
+#
+# Pinned rather than floating: this is an application, not a library, and the
+# scikit-learn pin in particular is load-bearing. The models in models/ are
+# joblib-serialized, and loading them under a different scikit-learn version
+# fails or warns rather than degrading gracefully.
+#
+#   pip install -r requirements.txt
+#   playwright install chromium
+#
+# Training and experiment tracking live in requirements-dev.txt.
+
+# Agent and LLM
+langgraph==1.2.9
+langchain-core==1.4.9
+langchain-anthropic==1.4.8
+
+# MCP server
+mcp==2.0.0
+
+# Scoring and feature engineering
+scikit-learn==1.9.0
+joblib==1.5.3
+pandas==2.3.3
+numpy==2.5.1
+networkx==3.6.1
+
+# Connectors
+requests==2.34.2
+python-whois==0.9.6
+mitreattack-python==6.1.0
+playwright==1.61.0
+
+# Output
+stix2==3.0.2
+rich==15.0.0
+click==8.4.1
+
+# Configuration
+python-dotenv==1.2.2

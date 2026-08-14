@@ -76,7 +76,7 @@ def run(seed, output, depth, export_stix, deep):
     banner = (
         "[cyan]══════════════════════════════════════[/cyan]\n"
         "[bold white]OSINT PIVOT ENGINE[/bold white]\n"
-        "[cyan]── Autonomous Threat Intelligence · v1.1.2[/cyan]\n"
+        "[cyan]── Autonomous Threat Intelligence · v1.2.0[/cyan]\n"
         "[cyan]══════════════════════════════════════[/cyan]\n"
         f"[dim]Seed: {seed}[/dim]"
     )
