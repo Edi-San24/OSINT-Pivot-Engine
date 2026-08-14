@@ -118,6 +118,17 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             sha256 = sample.get("sha256", "")
             if sha256 and sha256 != "unknown" and sha256 not in visited:
                 new_indicators.append(sha256)
+
+    elif indicator_type == "threat_group":
+        # Sample hashes from the group's tooling, so the pivot continues into
+        # live samples rather than dead-ending at ATT&CK.
+        for bazaar_result in results.get("malwarebazaar_tooling", {}).values():
+            if not isinstance(bazaar_result, dict):
+                continue
+            for sample in bazaar_result.get("samples", []):
+                sha256 = sample.get("sha256", "")
+                if sha256 and sha256 != "unknown" and sha256 not in visited:
+                    new_indicators.append(sha256)
  
     # NER extraction — scan text fields for threat actor mentions
     threat_actors = ner_extractor.extract_threat_actors(result, visited)
@@ -159,123 +170,220 @@ def run_pivot(state: AgentState) -> AgentState:
     return state
  
  
-def _parse_llm_json(content: object) -> dict:
-    """
-    Extracts and parses JSON from an LLM response.
-    Handles list content blocks, markdown fences, and empty responses.
-    Returns parsed dict or raises ValueError if unparseable.
-    """
-    if isinstance(content, list):
-        content = content[0].get("text", "") if content else ""
- 
-    if not isinstance(content, str) or not content.strip():
-        raise ValueError("Empty response from LLM")
- 
-    text = content.strip()
- 
-    # Strip markdown fences
-    if text.startswith("```"):
-        parts = text.split("```")
-        text = parts[1] if len(parts) > 1 else text
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
- 
-    return json.loads(text)
+def extract_findings(result: dict) -> list[str]:
+    """Builds the findings list for one pivot result from connector output."""
+    findings: list[str] = []
+    indicator = result.get("indicator", "")
+    results = result.get("results", {})
+
+    # VirusTotal — detection consensus and family label
+    vt = results.get("virustotal", {})
+    malicious = vt.get("malicious_votes", 0)
+    harmless = vt.get("harmless_votes", 0)
+    if malicious:
+        findings.append(
+            f"{indicator}: VirusTotal flagged malicious by {malicious} of "
+            f"{malicious + harmless} engines."
+        )
+    if vt.get("malware_family"):
+        findings.append(f"{indicator}: VirusTotal family label — {vt['malware_family']}.")
+
+    # Shodan and Censys — exposed services and hosting
+    shodan = results.get("shodan", {})
+    censys = results.get("censys", {})
+    ports = shodan.get("open_ports", []) or censys.get("open_ports", [])
+    if ports:
+        port_list = ", ".join(str(p) for p in ports[:8])
+        findings.append(f"{indicator}: {len(ports)} open ports — {port_list}.")
+
+    if shodan.get("organization"):
+        findings.append(f"{indicator}: hosted by {shodan['organization']}.")
+
+    country = censys.get("country", "")
+    if country and country != "unknown":
+        findings.append(f"{indicator}: geolocated to {country}.")
+
+    # PassiveDNS — resolution history breadth
+    record_count = results.get("passivedns", {}).get("record_count", 0)
+    if record_count:
+        findings.append(f"{indicator}: {record_count} historical DNS records.")
+
+    # URLhaus — active delivery infrastructure
+    urlhaus = results.get("urlhaus", {})
+    if urlhaus.get("found"):
+        online = sum(1 for u in urlhaus.get("urls", []) if u.get("status") == "online")
+        findings.append(
+            f"{indicator}: URLhaus lists {urlhaus.get('url_count', 0)} malicious URLs "
+            f"({online} currently online)."
+        )
+
+    # OTX — community pulse reporting
+    otx = results.get("otx", {})
+    pulse_count = otx.get("pulse_count", 0)
+    if pulse_count:
+        names = [p.get("name", "") for p in otx.get("pulses", [])[:3] if p.get("name")]
+        detail = f" Including: {'; '.join(names)}." if names else ""
+        findings.append(f"{indicator}: referenced in {pulse_count} OTX pulses.{detail}")
+
+    # MalwareBazaar returns two shapes: one sample inline (hash lookups), or a
+    # "samples" list (signature and filename lookups).
+    bazaar = results.get("malwarebazaar", {})
+    if bazaar.get("found") and "samples" in bazaar:
+        samples = bazaar.get("samples", [])
+        findings.append(
+            f"{indicator}: MalwareBazaar has "
+            f"{bazaar.get('sample_count', len(samples))} matching samples."
+        )
+        families = sorted({
+            s.get("malware_family") for s in samples
+            if s.get("malware_family") and s.get("malware_family") != "unknown"
+        })
+        if families:
+            findings.append(f"{indicator}: sample families — {', '.join(families[:5])}.")
+        sample_tags = sorted({t for s in samples for t in s.get("tags", []) or []})
+        if sample_tags:
+            findings.append(f"{indicator}: sample tags — {', '.join(sample_tags[:8])}.")
+        seen = sorted(s.get("first_seen") for s in samples if s.get("first_seen"))
+        if seen:
+            findings.append(
+                f"{indicator}: samples first seen between {seen[0]} and {seen[-1]}."
+            )
+    elif bazaar.get("found"):
+        findings.append(
+            f"{indicator}: MalwareBazaar sample — family "
+            f"{bazaar.get('malware_family') or 'unclassified'}, type "
+            f"{bazaar.get('file_type', 'unknown')}, first seen "
+            f"{bazaar.get('first_seen', 'unknown')}."
+        )
+        tags = bazaar.get("tags", [])
+        if tags:
+            findings.append(f"{indicator}: MalwareBazaar tags — {', '.join(tags[:8])}.")
+
+    related = results.get("malwarebazaar_related", {})
+    if related.get("found"):
+        findings.append(
+            f"{indicator}: {related.get('sample_count', 0)} related samples share "
+            "this malware family tag."
+        )
+
+    # Threat group tooling chained into MalwareBazaar by pivot_group
+    tooling = results.get("malwarebazaar_tooling")
+    if isinstance(tooling, dict) and tooling:
+        with_samples = {
+            name: r.get("sample_count", 0)
+            for name, r in tooling.items()
+            if isinstance(r, dict) and r.get("found")
+        }
+        if with_samples:
+            detail = ", ".join(f"{n} ({c})" for n, c in sorted(with_samples.items()))
+            findings.append(
+                f"{indicator}: live MalwareBazaar samples for group tooling — {detail}."
+            )
+        else:
+            findings.append(
+                f"{indicator}: no live samples on MalwareBazaar for any chainable "
+                f"tooling ({', '.join(sorted(tooling))})."
+            )
+    elif isinstance(tooling, dict) and results.get("mitre", {}).get("found"):
+        # Nothing chainable means a living-off-the-land actor, which is itself
+        # a finding rather than an absence of one.
+        findings.append(
+            f"{indicator}: no purpose-built malware attributed to this group — "
+            "tooling is entirely living-off-the-land binaries."
+        )
+
+    # MITRE ATT&CK — technique coverage and attribution.
+    mitre = results.get("mitre", {})
+    if mitre.get("found"):
+        if mitre.get("group_name"):
+            aliases = mitre.get("aliases", [])
+            alias_note = f" (aliases: {', '.join(aliases[:6])})" if aliases else ""
+            findings.append(
+                f"{indicator}: matches MITRE ATT&CK group "
+                f"{mitre['group_name']}{alias_note}."
+            )
+        if mitre.get("software_name"):
+            findings.append(
+                f"{indicator}: matches MITRE ATT&CK software entry "
+                f"{mitre['software_name']}."
+            )
+
+        # True totals, not len() of the truncated lists.
+        techniques = mitre.get("techniques", [])
+        if techniques:
+            total = mitre.get("technique_count", len(techniques))
+            ids = ", ".join(t.get("technique_id", "") for t in techniques[:5])
+            findings.append(
+                f"{indicator}: MITRE ATT&CK maps {total} techniques — {ids}"
+                f"{' and others' if total > 5 else ''}."
+            )
+        groups = mitre.get("groups", [])
+        if groups:
+            total = mitre.get("group_count", len(groups))
+            names = ", ".join(g.get("name", "") for g in groups[:5])
+            findings.append(
+                f"{indicator}: attributed to {total} threat groups — {names}"
+                f"{' and others' if total > 5 else ''}."
+            )
+        software = mitre.get("software", [])
+        if software:
+            total = mitre.get("software_count", len(software))
+            names = ", ".join(s.get("name", "") for s in software[:5])
+            findings.append(
+                f"{indicator}: {total} associated software entries — {names}"
+                f"{' and others' if total > 5 else ''}."
+            )
+
+    # SpiderFoot — identity footprint
+    spiderfoot = results.get("spiderfoot", {})
+    if spiderfoot.get("finding_count"):
+        findings.append(
+            f"{indicator}: SpiderFoot returned "
+            f"{spiderfoot['finding_count']} identity findings."
+        )
+
+    # Visibility gaps — name the sources that failed so summarize can cite them
+    errored = sorted(
+        name for name, payload in results.items()
+        if isinstance(payload, dict) and "error" in payload
+    )
+    if errored:
+        findings.append(f"{indicator}: no data returned from {', '.join(errored)}.")
+
+    return findings
  
  
 def analyze_results(state: AgentState) -> AgentState:
     """
-    Uses Claude to analyze pivot results and determine
-    whether to continue pivoting or stop and summarize.
-    Advances queue and sets next current_seed here.
+    Records findings from the latest pivot and advances the queue.
+    Deterministic — control flow comes from the queue and the depth cap.
     """
-    logger.info("Agent analyzing pivot results...")
- 
-    latest_result = state["pivot_results"][-1]
-    result_str = safe_json(latest_result, limit=4000)
- 
-    system_prompt = (
-        "You are an expert cyber threat intelligence analyst.\n"
-        "You will be given OSINT pivot results for a seed indicator.\n\n"
-        "You MUST respond with ONLY a valid JSON object. No preamble, no explanation, no markdown.\n"
-        "The response must start with { and end with }.\n\n"
-        'Required format:\n{"findings": ["finding 1", "finding 2"], "should_continue": true, "reason": "brief explanation"}\n\n'
-        "Rules:\n"
-        "- findings: list of strings, each a specific notable finding from the data\n"
-        "- should_continue: boolean, true if more pivoting would yield useful intelligence\n"
-        "- reason: one sentence explaining your decision"
-    )
- 
-    user_message = (
-        "Analyze these OSINT pivot results:\n\n"
-        f"Indicator: {state['current_seed']}\n"
-        f"Type: {state['indicator_type']}\n"
-        f"Pivot count: {state['pivot_count']}\n"
-        f"Max allowed pivots: {config.MAX_PIVOT_DEPTH}\n"
-        f"Indicators in queue: {len(state['pivot_queue'])}\n\n"
-        f"Results:\n{result_str}"
-    )
- 
-    parse_succeeded = False
- 
-    try:
-        response = llm.invoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_message)
-        ])
-        analysis = _parse_llm_json(response.content)
-        state["findings"].extend(analysis.get("findings", []))
-        state["should_continue"] = analysis.get("should_continue", False)
-        logger.info(f"Analysis complete. Continue: {state['should_continue']}")
-        parse_succeeded = True
- 
-    except Exception:
-        # Retry with minimal prompt
-        try:
-            retry_result_str = safe_json(latest_result, limit=2000)
-            retry_response = llm.invoke([
-                SystemMessage(content='Respond with ONLY valid JSON. Format: {"findings": [], "should_continue": false, "reason": ""}'),
-                HumanMessage(content=f"Analyze this and return JSON only:\n{retry_result_str}")
-            ])
-            analysis = _parse_llm_json(retry_response.content)
-            state["findings"].extend(analysis.get("findings", []))
-            state["should_continue"] = analysis.get("should_continue", False)
-            parse_succeeded = True
-            logger.info("Analyze retry succeeded.")
-        except Exception:
-            logger.info("analyze_results: using fallback, continuing based on queue.")
-            state["should_continue"] = len(state["pivot_queue"]) > 0
- 
-    # NER — scan latest pivot result for threat actor mentions and queue them
+    logger.info("Recording findings and advancing queue...")
+
     latest = state["pivot_results"][-1]
+    state["findings"].extend(extract_findings(latest))
+
+    # NER — scan latest pivot result for threat actor mentions and queue them
     actors = ner_extractor.extract_threat_actors(latest, state["visited"])
     for actor in actors:
         if actor not in state["pivot_queue"] and actor not in state["visited"]:
             state["pivot_queue"].append(actor)
             logger.info(f"NER queued threat actor: {actor}")
- 
-    # If queue is empty, stop regardless of what the LLM decided
-    if not state["pivot_queue"]:
-        state["should_continue"] = False
-        logger.info("Queue is empty. Moving to summarize.")
- 
-    # Advance queue — skip anything already visited
-    if state["pivot_queue"] and state["pivot_count"] < config.MAX_PIVOT_DEPTH:
-        next_seed = None
+
+    # Advance queue — take the first candidate we have not already pivoted on
+    state["should_continue"] = False
+    if state["pivot_count"] < config.MAX_PIVOT_DEPTH:
         while state["pivot_queue"]:
             candidate = state["pivot_queue"].pop(0)
             if candidate not in state["visited"]:
-                next_seed = candidate
+                state["current_seed"] = candidate
+                state["should_continue"] = True
+                logger.info(f"Advancing to next indicator: {candidate}")
                 break
-        if next_seed:
-            state["current_seed"] = next_seed
-            state["should_continue"] = True
-            logger.info(f"Advancing to next indicator: {next_seed}")
-        else:
-            state["should_continue"] = False
-            logger.info("Queue exhausted after deduplication. Moving to summarize.")
- 
+
+    if not state["should_continue"]:
+        logger.info("No unvisited indicators remaining. Moving to summarize.")
+
     return state
  
  

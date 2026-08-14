@@ -8,10 +8,11 @@ import logging
 import requests
 from mitreattack.stix20 import MitreAttackData
 
+from config import DATA_DIR, STIX_CACHE_PATH
+
 logger = logging.getLogger(__name__)
 
 STIX_URL = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"
-STIX_CACHE_PATH = "data/enterprise-attack.json"
 
 MAX_TECHNIQUES = 20
 MAX_GROUPS = 10
@@ -37,7 +38,7 @@ class MITREConnector:
         Only runs on first use — subsequent calls load from disk.
         """
         if not os.path.exists(STIX_CACHE_PATH):
-            os.makedirs("data", exist_ok=True)
+            os.makedirs(DATA_DIR, exist_ok=True)
             logger.info("Downloading MITRE ATT&CK STIX bundle (first run)...")
             try:
                 response = requests.get(STIX_URL, timeout=60)
@@ -160,7 +161,11 @@ class MITREConnector:
                 "searched_as": clean_name,
                 "stix_id": stix_id,
                 "software_name": software.name,
+                "software_type": getattr(software, "type", "unknown"),
                 "description": getattr(software, "description", "")[:DESCRIPTION_LIMIT],
+                # True totals, taken before truncation — see query_group.
+                "technique_count": len(techniques_raw),
+                "group_count": len(groups_raw),
                 "techniques": techniques,
                 "groups": groups,
             }
@@ -193,8 +198,13 @@ class MITREConnector:
             techniques = self._extract_techniques(techniques_raw)
 
             software_raw = self.attack_data.get_software_used_by_group(stix_id)
+            # Malware first, so truncation keeps the entries worth pivoting into.
+            software_sorted = sorted(
+                software_raw,
+                key=lambda e: 0 if getattr(e["object"], "type", "") == "malware" else 1
+            )
             software = []
-            for entry in software_raw[:MAX_SOFTWARE]:
+            for entry in software_sorted[:MAX_SOFTWARE]:
                 sw = entry["object"]
                 software.append({
                     "software_id": self._get_attack_id(sw),
@@ -211,6 +221,10 @@ class MITREConnector:
                 "group_name": group.name,
                 "aliases": getattr(group, "aliases", []),
                 "description": getattr(group, "description", "")[:DESCRIPTION_LIMIT],
+                # True totals, taken before the lists below are truncated.
+                # Scoring must use these, not len() of the truncated lists.
+                "technique_count": len(techniques_raw),
+                "software_count": len(software_raw),
                 "techniques": techniques,
                 "software": software,
             }

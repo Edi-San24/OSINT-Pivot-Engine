@@ -32,6 +32,17 @@ ALLOWED_TYPES = {
     "ipv4", "domain", "md5", "sha1", "sha256",
     "email", "username", "threat_group", "software"
 }
+
+# Dual-use tooling worth chaining anyway — offensive frameworks that do
+# circulate as samples. Everything else MITRE types as "tool" is a
+# living-off-the-land binary and gets skipped.
+CHAINABLE_TOOLS = {
+    "cobalt strike", "mimikatz", "impacket", "sliver", "brute ratel c4",
+    "empire", "powersploit", "koadic", "pupy", "metasploit", "winexe",
+}
+
+# Caps the MalwareBazaar lookups fired per threat group pivot.
+MAX_TOOLING_LOOKUPS = 5
  
  
 def _run_parallel(tasks: dict) -> dict:
@@ -179,19 +190,54 @@ class PivotExecutor:
  
         return {"indicator": hash_val, "type": "hash", "results": results}
  
+    def _chainable_tooling(self, mitre_result: dict) -> list[str]:
+        """
+        Picks the group's software entries worth looking up in MalwareBazaar.
+        Purpose-built malware always qualifies; dual-use tooling only if it is
+        in CHAINABLE_TOOLS.
+        """
+        if not mitre_result.get("found"):
+            return []
+
+        chainable = []
+        for entry in mitre_result.get("software", []):
+            name = (entry.get("name") or "").strip()
+            if not name:
+                continue
+            if entry.get("type") == "malware" or name.lower() in CHAINABLE_TOOLS:
+                chainable.append(name)
+
+        return chainable[:MAX_TOOLING_LOOKUPS]
+
     def pivot_group(self, group_name: str, deep: bool = False) -> dict:
         """
-        Looks up a threat group by name in MITRE ATT&CK.
-        Returns associated techniques, software, and group metadata.
+        Looks up a threat group in MITRE ATT&CK, then chains its malware into
+        MalwareBazaar. Sample hashes found here get queued for hash pivots.
         """
         logger.info(f"Starting threat group pivot for: {group_name[:50]}")
         results = {}
- 
+
         try:
-            results["mitre"] = self.mitre.query_group(group_name)
+            mitre_result = self.mitre.query_group(group_name)
+            results["mitre"] = mitre_result
+
+            chainable = self._chainable_tooling(mitre_result)
+            if chainable:
+                logger.info(f"Querying MalwareBazaar for group tooling: {chainable}")
+                tasks = {
+                    name: (lambda n=name: self.bazaar.query_signature(n))
+                    for name in chainable
+                }
+                results["malwarebazaar_tooling"] = _run_parallel(tasks)
+            else:
+                results["malwarebazaar_tooling"] = {}
+                logger.info(
+                    "No chainable tooling — group uses only living-off-the-land binaries."
+                )
+
         except Exception as e:
             logger.error(f"Error during group pivot: {str(e)[:100]}")
- 
+
         return {"indicator": group_name, "type": "threat_group", "results": results}
  
     def pivot_software(self, name: str, deep: bool = False) -> dict:

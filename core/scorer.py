@@ -7,11 +7,17 @@ import joblib
 import numpy as np
 import logging
 from core.features import extract_features
- 
+from config import MODEL_DIR
+
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
- 
-MODEL_DIR = "models"
+
+# Full marks on each component, set to the 95th percentile of the measured
+# distribution across all ATT&CK groups. Must stay above the connector's
+# truncation caps, or every well-documented group scores identically.
+TECHNIQUE_FULL_MARKS = 78
+SOFTWARE_FULL_MARKS = 23
+ALIAS_FULL_MARKS = 9
  
  
 class ConfidenceScorer:
@@ -85,14 +91,15 @@ class ConfidenceScorer:
                 "note": "Group not found in MITRE ATT&CK — query may need an alternate alias."
             }
  
-        technique_count = len(mitre.get("techniques", []))
-        software_count = len(mitre.get("software", []))
+        # True totals from the connector. The len() fallback is for older
+        # cached results only, and undercounts.
+        technique_count = mitre.get("technique_count", len(mitre.get("techniques", [])))
+        software_count = mitre.get("software_count", len(mitre.get("software", [])))
         alias_count = len(mitre.get("aliases", []))
- 
-        # Tightened denominators
-        technique_score = min(technique_count / 20, 1.0)
-        software_score = min(software_count / 12, 1.0)
-        alias_score = min(alias_count / 8, 1.0)
+
+        technique_score = min(technique_count / TECHNIQUE_FULL_MARKS, 1.0)
+        software_score = min(software_count / SOFTWARE_FULL_MARKS, 1.0)
+        alias_score = min(alias_count / ALIAS_FULL_MARKS, 1.0)
  
         confidence_score = (
             technique_score * 0.5 +

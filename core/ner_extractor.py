@@ -4,11 +4,16 @@
 # and automatically queues them for MITRE ATT&CK pivot chaining.
 
 import logging
+import re
+
 from mitreattack.stix20 import MitreAttackData
 
 from config import STIX_CACHE_PATH
 
 logger = logging.getLogger(__name__)
+
+# Names shorter than this are too collision-prone to match inside free text.
+MIN_MATCH_LENGTH = 4
  
  
 class NERExtractor:
@@ -22,6 +27,7 @@ class NERExtractor:
     def __init__(self):
         self.group_names = set()
         self.group_name_map = {}  # lowercase -> original casing
+        self._pattern = None
         self._load_group_names()
  
     def _load_group_names(self):
@@ -40,9 +46,29 @@ class NERExtractor:
                 for alias in aliases:
                     self.group_names.add(alias.lower())
                     self.group_name_map[alias.lower()] = alias
+            self._build_pattern()
             logger.info(f"NER loaded {len(self.group_names)} group names and aliases.")
         except Exception as e:
             logger.error(f"Failed to load ATT&CK group names: {str(e)[:100]}")
+
+    def _build_pattern(self):
+        """
+        Compiles every group name into one alternation, longest first so the
+        most specific name wins at a given position (APT38 over APT3).
+
+        The lookarounds enforce word boundaries. Plain containment would match
+        any name inside a longer identifier, which queues the wrong actor.
+        """
+        names = sorted(
+            (n for n in self.group_names if len(n) >= MIN_MATCH_LENGTH),
+            key=len,
+            reverse=True,
+        )
+        if not names:
+            self._pattern = None
+            return
+        alternation = "|".join(re.escape(n) for n in names)
+        self._pattern = re.compile(rf"(?<![\w-])({alternation})(?![\w-])")
  
     def _extract_text_fields(self, pivot_result: dict) -> list:
         """
@@ -114,15 +140,14 @@ class NERExtractor:
                 original = self.group_name_map.get(text_lower, text.strip())
                 found.add(original)
                 continue
- 
-            # Substring match — group name appears within longer text
-            for group_name in self.group_names:
-                if len(group_name) < 4:
-                    # Skip very short names to avoid false positives
-                    continue
-                if group_name in text_lower and group_name not in visited_lower:
-                    original = self.group_name_map.get(group_name, group_name)
-                    found.add(original)
+
+            # Word-boundary match — group name appears within longer text
+            if not self._pattern:
+                continue
+            for match in self._pattern.finditer(text_lower):
+                group_name = match.group(1)
+                if group_name not in visited_lower:
+                    found.add(self.group_name_map.get(group_name, group_name))
  
         if found:
             logger.info(f"NER extracted {len(found)} threat actor(s): {found}")
