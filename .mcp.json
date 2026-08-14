@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "osint-pivot": {
+      "command": "/Users/edisonchalas/osint-pivot-engine/venv/bin/python",
+      "args": ["/Users/edisonchalas/osint-pivot-engine/mcp_server.py"]
+    }
+  }
+}
