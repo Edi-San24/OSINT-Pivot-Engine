@@ -6,9 +6,18 @@ import logging
 logging.getLogger().setLevel(logging.ERROR)
 
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Paths resolve against this file, not the working directory — the MCP server
+# runs as a subprocess with an arbitrary cwd, where relative paths fail
+# silently rather than raising.
+PROJECT_ROOT = Path(__file__).resolve().parent
+MODEL_DIR = str(PROJECT_ROOT / "models")
+DATA_DIR = str(PROJECT_ROOT / "data")
+STIX_CACHE_PATH = str(PROJECT_ROOT / "data" / "enterprise-attack.json")
+
+load_dotenv(PROJECT_ROOT / ".env")
 
 # API Keys
 SHODAN_API_KEY = os.getenv("SHODAN_API_KEY", "")

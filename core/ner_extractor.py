@@ -5,10 +5,10 @@
 
 import logging
 from mitreattack.stix20 import MitreAttackData
- 
+
+from config import STIX_CACHE_PATH
+
 logger = logging.getLogger(__name__)
- 
-STIX_CACHE_PATH = "data/enterprise-attack.json"
  
  
 class NERExtractor:

@@ -13,19 +13,21 @@ from sklearn.ensemble import IsolationForest, GradientBoostingClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, roc_auc_score
 from core.features import build_feature_matrix, FEATURE_COLUMNS
+from config import MODEL_DIR, DATA_DIR
 
-# Model output directory
-MODEL_DIR = "models"
+# Model output directory — shared with core/scorer.py via config so training
+# always writes where scoring reads, regardless of the working directory.
 os.makedirs(MODEL_DIR, exist_ok=True)
+TRAINING_DATA_PATH = os.path.join(DATA_DIR, "training_data.csv")
 
 def load_training_data() -> tuple:
     """
     Loads real labeled training data from CSV.
     Falls back to synthetic data if CSV not found.
     """
-    if os.path.exists("data/training_data.csv"):
+    if os.path.exists(TRAINING_DATA_PATH):
         print("[*] Loading real training data from CSV...")
-        df = pd.read_csv("data/training_data.csv")
+        df = pd.read_csv(TRAINING_DATA_PATH)
         df = df.fillna(0)
         X = df[FEATURE_COLUMNS]
         y = df["label"].values

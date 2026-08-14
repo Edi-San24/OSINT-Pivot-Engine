@@ -16,6 +16,7 @@ import logging
 from urllib.parse import urlparse
 from core.features import extract_features, FEATURE_COLUMNS
 from core.executor import PivotExecutor
+from config import DATA_DIR
 
 # Dedicated logger — avoids conflict with executor's logging config
 logger = logging.getLogger(__name__)
@@ -26,8 +27,8 @@ formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
-# Output path
-OUTPUT_PATH = "data/training_data.csv"
+# Output path — matches where core/trainer.py reads from
+OUTPUT_PATH = os.path.join(DATA_DIR, "training_data.csv")
 
 # Rate limit between connector calls
 RATE_LIMIT = 2.0
