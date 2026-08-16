@@ -68,6 +68,10 @@ class OTXConnector:
                         "tags": p.get("tags", []),
                         "malware_families": p.get("malware_families", []),
                         "targeted_countries": p.get("targeted_countries", []),
+                        # Structured sector targeting — the only source in the
+                        # pipeline that has it. MITRE groups carry targeting in
+                        # prose only. Consumed by core/relevance.py.
+                        "industries": p.get("industries", []),
                     }
                     for p in pulses
                 ]

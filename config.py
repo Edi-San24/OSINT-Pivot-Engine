@@ -17,6 +17,10 @@ MODEL_DIR = str(PROJECT_ROOT / "models")
 DATA_DIR = str(PROJECT_ROOT / "data")
 STIX_CACHE_PATH = str(PROJECT_ROOT / "data" / "enterprise-attack.json")
 
+# Optional org profile. Absent means the relevance layer stays silent — see
+# core/relevance.py for why silence beats a possibly stale answer.
+ORG_PROFILE_PATH = str(PROJECT_ROOT / "org_profile.yaml")
+
 load_dotenv(PROJECT_ROOT / ".env")
 
 # API Keys

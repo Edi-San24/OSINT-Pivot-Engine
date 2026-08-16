@@ -151,6 +151,28 @@ def run(seed, output, depth, export_stix, deep, verbose):
         agent_verdict = extract_threat_level(result['summary']) or "none stated"
         table.add_row("[dim]Agent verdict[/dim]", f"[dim]{agent_verdict}[/dim]")
 
+    # Org relevance — absent entirely unless an org profile is configured.
+    # Ordered by urgency: an indicator that is your own host outranks
+    # everything else in this table.
+    relevance_styles = [
+        ("OWN ASSET", "bold red", "red"),
+        ("BRAND ABUSE", "bold yellow", "yellow"),
+        ("ORG RELEVANCE", "bold cyan", "cyan"),
+        ("COVERAGE GAP", "dim", "dim"),
+    ]
+    relevance_hits = [
+        (prefix, label_style, value_style, finding)
+        for prefix, label_style, value_style in relevance_styles
+        for finding in result['findings'] if finding.startswith(prefix)
+    ]
+    if relevance_hits:
+        table.add_row("", "")
+        for prefix, label_style, value_style, finding in relevance_hits[:5]:
+            table.add_row(
+                f"[{label_style}]{prefix}[/{label_style}]",
+                f"[{value_style}]{finding[len(prefix) + 2:]}[/{value_style}]"
+            )
+
     # Early warning
     early_warnings = [f for f in result['findings'] if "EARLY WARNING" in f]
     if early_warnings:

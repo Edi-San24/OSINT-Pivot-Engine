@@ -6,4 +6,5 @@ data/
 venv/
 __pycache__/
 .env
+org_profile.yaml
 ahmia_debug.html

@@ -23,6 +23,7 @@ from core.temporal_scorer import TemporalScorer
 from core.ner_extractor import NERExtractor
 from core.detector import detect_type
 from core.risk import NON_INFRASTRUCTURE_TYPES
+from core.relevance import assess_relevance, load_profile
  
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
@@ -38,6 +39,9 @@ scorer = ConfidenceScorer()
 graph_scorer = GraphScorer()
 temporal_scorer = TemporalScorer()
 ner_extractor = NERExtractor()
+
+# Loaded once at import. None when no profile exists, which disables the layer.
+org_profile = load_profile()
  
  
 class AgentState(TypedDict):
@@ -56,6 +60,7 @@ class AgentState(TypedDict):
     summary: str
     pivot_count: int
     deep: bool
+    relevance_level: str
  
  
 def is_ipv4(value: str) -> bool:
@@ -446,6 +451,11 @@ def apply_context(state: AgentState) -> AgentState:
             f"EARLY WARNING: Related malware samples for {early_warning_indicator} "
             "detected within the last 7 days — active campaign signal."
         )
+
+    # Organisational relevance — silent unless an org profile is configured.
+    relevance = assess_relevance(state["pivot_results"], org_profile)
+    state["relevance_level"] = relevance["level"]
+    state["findings"].extend(relevance["findings"])
  
     logger.info(f"ML: {blended_score} | Graph: {graph_score} | Temporal: {temporal_score} | Context: {context_score}")
  
@@ -560,6 +570,7 @@ def run_agent(seed: str, deep: bool = False) -> dict:
         "summary": "",
         "pivot_count": 0,
         "deep": deep,
+        "relevance_level": "none",
     }
  
     graph = StateGraph(AgentState)
@@ -589,6 +600,7 @@ def run_agent(seed: str, deep: bool = False) -> dict:
         "context_score": final_state["context_score"],
         "infrastructure_type": final_state["infrastructure_type"],
         "indicator_type": final_state["indicator_type"],
+        "relevance_level": final_state["relevance_level"],
         "context_note": final_state["context_note"],
         "full_results": final_state["pivot_results"],
         "visited": final_state["visited"],

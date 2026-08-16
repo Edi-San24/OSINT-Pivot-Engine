@@ -1,0 +1,50 @@
+# Org profile — copy to org_profile.yaml and fill in.
+#
+# This is what turns "this indicator is malicious" into "this indicator is
+# aimed at us". Without it the engine still runs; it just stays silent about
+# relevance rather than guessing.
+#
+# Keep it current. An out-of-date netblock list is worse than an empty one,
+# because the engine can only report matches it finds — it never reports that
+# something is NOT yours, precisely so a stale file cannot produce a
+# false all-clear.
+
+# Address space you own. Any investigated IP falling inside these is reported
+# as YOUR host, which reframes the whole investigation as a possible
+# compromise rather than an external threat. Highest-value field here.
+netblocks:
+  - 203.0.113.0/24
+  - 198.51.100.0/24
+
+# ASN or hosting provider names. Matched against Censys autonomous system,
+# Shodan organisation, and VirusTotal owner.
+asns:
+  - AS64496
+  - Example Corp
+
+# Domains you own. Used to catch lookalikes: near-identical spellings
+# (yourorg.com vs yourorq.com) and domains embedding your brand
+# (yourorg-login.net). Both are phishing infrastructure standing up.
+domains:
+  - example.com
+  - example-corp.com
+
+# Your sector, matched against the industries named in AlienVault OTX pulse
+# reporting. Use OTX's own vocabulary — Finance, Government, Defense,
+# Industrial, Healthcare, Energy, Telecommunications, Retail, Education.
+sectors:
+  - Finance
+
+# Your country, matched against OTX targeted_countries. Use the full name as
+# OTX writes it.
+countries:
+  - United States of America
+
+# ATT&CK techniques you already detect or mitigate. Anything mapped in an
+# investigation that is not listed here gets reported as a coverage gap.
+# Listing a parent technique covers its sub-techniques, so T1021 covers
+# T1021.001. Leave empty to skip this check entirely.
+mitigated_techniques:
+  - T1566.001
+  - T1210
+  - T1486

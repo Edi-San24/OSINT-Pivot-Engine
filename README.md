@@ -193,6 +193,46 @@ in the wild.
 
 ---
 
+## Optional: Org Profile
+
+By default the engine tells you what an indicator is. An org profile also tells you whether it matters to you.
+
+Copy the example and fill in whatever you know:
+
+```bash
+cp org_profile.example.yaml org_profile.yaml
+```
+
+| Setting | What it catches |
+|---------|-----------------|
+| `netblocks` | An investigated IP that turns out to be one of your own hosts |
+| `asns` | Infrastructure hosted in your own ASN |
+| `domains` | Lookalike domains built to impersonate yours |
+| `sectors` | Reporting that names your industry as a target |
+| `countries` | Reporting that names your country as a target |
+| `mitigated_techniques` | ATT&CK techniques you have no coverage for |
+
+Every setting is optional. Fill in the ones you have and leave the rest out.
+
+When something matches, it shows up at the bottom of the results table:
+
+```
+   OWN ASSET         203.0.113.44 is inside your netblock 203.0.113.0/24.
+                     Treat as a potential compromise, not an external threat.
+   BRAND ABUSE       examp1e.com is a near-identical spelling of example.com.
+   ORG RELEVANCE     reporting names your sector (Finance) as targeted.
+   COVERAGE GAP      1 of 4 mapped techniques have no stated coverage in your
+                     profile, T1486.
+```
+
+`OWN ASSET` is the one to watch for. It means something you were investigating as an outside threat is actually your own infrastructure, which is a completely different situation.
+
+Two things worth knowing. The file is gitignored, because it describes your internal network. And the engine only reports matches it can prove, so it will never tell you an indicator is safe or unrelated to you. If your netblock list falls out of date you get silence, not a wrong all clear.
+
+If you skip this entirely, nothing above appears and the engine works exactly as it does now.
+
+---
+
 ## Optional: MCP Server
 
 The CLI above is the primary interface and needs nothing beyond Python and API keys. If you happen to use Claude Code or Claude Desktop, the engine also runs as an MCP server so you can drive it conversationally. This is a convenience layer, not a requirement.
