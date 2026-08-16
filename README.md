@@ -155,6 +155,9 @@ python main.py --seed "suspicious-domain.com" --depth 5
 
 # Enable SpiderFoot for email and username seeds
 python main.py --seed "analyst@example.com" --deep
+
+# Show how the score and risk level were derived
+python main.py --seed "185.220.101.45" --verbose
 ```
 
 ---
@@ -170,8 +173,7 @@ Seed: Lazarus Group
 
    Pivots run       3
    Findings         22
-   ML Score         0.9556
-   Context Score    0.9556
+   Score            0.9556
    Risk Level       HIGH
 
 Investigation Summary:
