@@ -18,6 +18,13 @@ logger = logging.getLogger(__name__)
 TECHNIQUE_FULL_MARKS = 78
 SOFTWARE_FULL_MARKS = 23
 ALIAS_FULL_MARKS = 9
+
+# Sample volume earning full marks on a malware family pivot. Measured across
+# established families: targeted ransomware sits around 27-80 while commodity
+# malware runs into the thousands. Volume therefore marks whether a family is
+# established, not how dangerous it is — severity comes from the tag signal —
+# so this saturates early on purpose.
+SAMPLE_VOLUME_FULL_MARKS = 50
  
  
 class ConfidenceScorer:
@@ -134,26 +141,29 @@ class ConfidenceScorer:
             }
  
         samples = bazaar.get("samples", [])
-        sample_count = len(samples)
- 
-        # Sample count signal — more samples = more widespread = higher risk
-        sample_score = min(sample_count / 10, 1.0)
- 
-        # Tag risk signal — ransomware/rat/stealer tags elevate score
+        # True total from the connector. The len() fallback is for older cached
+        # results only, and undercounts.
+        sample_count = bazaar.get("sample_count", len(samples))
+
+        sample_score = min(sample_count / SAMPLE_VOLUME_FULL_MARKS, 1.0)
+
+        # Tag risk signal — ransomware/rat/stealer tags elevate score.
+        # Measured over the samples actually returned, not the true total,
+        # which would dilute the ratio toward zero.
         high_risk_tags = {"ransomware", "rat", "stealer", "backdoor", "loader", "worm", "rootkit"}
         tag_hits = 0
         for sample in samples:
             tags = {t.lower() for t in sample.get("tags", [])}
             if tags & high_risk_tags:
                 tag_hits += 1
-        tag_score = min(tag_hits / max(sample_count, 1), 1.0)
- 
+        tag_score = tag_hits / len(samples) if samples else 0.0
+
         confidence_score = (sample_score * 0.5) + (tag_score * 0.5)
  
         return {
             "confidence_score": round(confidence_score, 4),
             "is_anomaly": False,
-            "risk_level": self._risk_level(confidence_score, thresholds=(0.5, 0.3)),
+            "risk_level": self._risk_level(confidence_score, thresholds=(0.65, 0.4)),
             "sample_count": sample_count,
             "note": "Score derived from MalwareBazaar sample volume and malware category tags.",
         }

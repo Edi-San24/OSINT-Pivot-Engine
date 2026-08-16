@@ -1,11 +1,11 @@
 # OSINT Pivot Engine
 
-> An AI agent that handles the pivot work so analysts can focus on what matters.
+> Drop in one indicator. Get back a scored, cross-referenced threat assessment.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
-![LangGraph](https://img.shields.io/badge/LangGraph-1.2+-green)
-![Claude](https://img.shields.io/badge/Claude-Fable%205-orange)
-![MCP](https://img.shields.io/badge/MCP-Server-purple)
+![CLI](https://img.shields.io/badge/Interface-CLI-brightgreen)
+![Connectors](https://img.shields.io/badge/Connectors-11-blue)
+![MCP](https://img.shields.io/badge/MCP-optional-purple)
 ![License](https://img.shields.io/badge/License-MIT-lightgrey)
 ![Status](https://img.shields.io/badge/Status-Active%20Development-yellow)
 
@@ -13,21 +13,28 @@
 
 ## The Problem
 
-CTI analysts face a persistent bottleneck: even with automated collection and triage pipelines, pivoting across sources still happens manually. Tab by tab, source by source, copy-paste by copy-paste. Under time pressure, that is where key insights get missed. A single indicator can touch VirusTotal, Shodan, PassiveDNS, certificate transparency logs, MITRE ATT&CK, and dark web indexes. Manually chaining those lookups takes time an analyst during an active incident does not have.
+Even with automated collection and triage in place, pivoting across sources is still manual. Tab by tab, source by source, copy-paste by copy-paste. Under incident pressure that is where things get missed.
 
-The OSINT Pivot Engine handles that layer so the analyst can focus on judgment, not data collection.
+A single indicator can touch VirusTotal, Shodan, passive DNS, certificate transparency, MITRE ATT&CK, and dark web indexes. Chaining those lookups by hand costs time an analyst does not have.
+
+This handles that layer, so the analyst spends their time on judgment instead of data collection.
+
+---
+
+## Who It's For
+
+Solo analysts, small SOCs without a commercial TIP budget, students, CTF players, and researchers. If you already have Recorded Future or Anomali, you have this and more. If you don't, this closes a real gap using free and low-cost API tiers.
 
 ---
 
 ## What It Does
 
-- **Automated pivot chaining:** drop a seed indicator and the agent queries eleven OSINT sources in parallel, then chains from IPs to domains to certificates to related malware samples without manual input
-- **Threat group profiling with live chaining:** query by adversary name and get full MITRE ATT&CK TTP mappings, aliases and tooling — then the engine chains that group's malware into MalwareBazaar to surface samples circulating right now, filtering out living-off-the-land binaries so pivots are not wasted on `netsh` and `ipconfig`
-- **Layered confidence scoring:** an ML score from features trained on real ThreatFox IOCs, blended with a graph score from relationship topology and a temporal score for campaign recency, then adjusted for shared infrastructure like CDNs and Tor exit nodes
-- **Hash pivot chaining:** seed a file hash, get VT detections and MalwareBazaar metadata, then chain into related samples via malware family tag clustering
-- **Deterministic findings:** every finding is derived directly from connector output, so results are reproducible and the only model call in an investigation is the final analyst summary
-- **MCP server:** drive the whole engine from Claude Code or Claude Desktop conversationally, instead of the CLI
-- **STIX 2.1 export:** package any investigation as a structured bundle importable by MISP, OpenCTI, Splunk, or any TAXII-compatible TIP
+- **Automated pivot chaining** — one seed indicator fans out across eleven sources in parallel, then follows what it finds: IPs to domains, domains to certificates, hashes to related samples, all without input
+- **Threat group profiling that doesn't dead-end** — query an adversary by name for full ATT&CK technique mappings, aliases, and tooling, then watch it chain that group's malware into MalwareBazaar to surface samples circulating right now. Living-off-the-land binaries are filtered out using MITRE's own software classification, so pivots aren't wasted on `netsh` and `ipconfig`
+- **Layered confidence scoring** — an ML score from features trained on real ThreatFox IOCs, blended with a graph score from relationship topology and a temporal score for campaign recency, then adjusted down for shared infrastructure like CDNs and Tor exits
+- **Early warning** — flags when related samples anywhere in the pivot chain were captured within the last seven days, which usually means an active campaign rather than a historical artifact
+- **Deterministic findings** — every finding is read directly from connector output, so two runs on the same data produce the same findings. The only model call in an investigation is the closing summary
+- **STIX 2.1 export** — hand any investigation to MISP, OpenCTI, Splunk, or any TAXII-compatible platform
 
 ---
 
@@ -40,25 +47,25 @@ Seed Indicator (IP / Domain / Hash / Email / Username / Threat Group / Malware F
 Type Detection
       |
       v
-Pivot Chain Executor  ──  eleven connectors fire in parallel
+Pivot Chain Executor  --  eleven connectors fire in parallel
       |
       v
 Deterministic Findings Extraction
       |
       v
-Discovered indicators queued  ──  loop until depth cap or queue empty
+Discovered indicators queued  --  loop until depth cap or queue empty
       |
       v
-ML + Graph + Temporal Scoring, adjusted by infrastructure context
+ML + Graph + Temporal Scoring, adjusted for infrastructure context
       |
       v
-Claude (Fable 5) writes the analyst summary
+Analyst summary (single LLM call)
       |
       v
 Terminal output, JSON, or STIX 2.1 bundle
 ```
 
-The pivot loop is deterministic. The model is used once per investigation, for the summary, which keeps runs reproducible and cheap.
+The pivot loop itself is plain Python — no model decides where to go next. That keeps runs reproducible, fast, and cheap: one API call per investigation regardless of depth.
 
 ---
 
@@ -66,16 +73,16 @@ The pivot loop is deterministic. The model is used once per investigation, for t
 
 | Source | Contribution |
 |--------|-------------|
-| VirusTotal | Malicious vote consensus, file reputation, malware family classification |
+| VirusTotal | Detection consensus, file reputation, malware family classification |
 | Shodan | Open ports, banners, hosting ASN, exposed services |
 | Censys | Certificate transparency, subdomain discovery, geolocation, ASN |
 | PassiveDNS (Mnemonic) | Historical DNS resolution, IP-to-domain and domain-to-IP mapping |
 | WHOIS | Registrar, registration date, expiration, nameservers |
-| MalwareBazaar | Hash triage, malware family classification, related sample clustering |
+| MalwareBazaar | Hash triage, family classification, related sample clustering |
 | URLhaus | Live malicious URLs, delivery infrastructure per malware family |
 | AlienVault OTX | Community pulse intelligence, targeted countries, campaign context |
-| MITRE ATT&CK | TTP mapping, threat group profiling, malware family attribution |
-| Ahmia | Dark web index search for indicator mentions across .onion space |
+| MITRE ATT&CK | TTP mapping, threat group profiling, malware attribution |
+| Ahmia | Dark web index search across .onion space |
 | SpiderFoot | Email and username footprint enrichment (requires `--deep`) |
 
 ---
@@ -96,9 +103,39 @@ The pivot loop is deterministic. The model is used once per investigation, for t
 
 ---
 
-## Usage
+## Setup
 
-### CLI
+**Requirements**
+
+- Python 3.10+
+- API keys for Anthropic, VirusTotal, Shodan, Censys, abuse.ch, and AlienVault OTX. Free tiers work for all of them
+
+**Install**
+
+```bash
+git clone https://github.com/Edi-San24/osint-pivot-engine
+cd osint-pivot-engine
+pip install -r requirements.txt
+playwright install chromium
+```
+
+**Configure**
+
+```bash
+cp .env.example .env
+```
+
+Then fill in your keys. The MITRE ATT&CK STIX bundle downloads and caches to `data/` automatically on first run.
+
+**Run**
+
+```bash
+python main.py --seed "your-indicator-here"
+```
+
+---
+
+## Usage
 
 ```bash
 # Basic investigation
@@ -110,28 +147,15 @@ python main.py --seed "Lazarus Group"
 # Save full results to JSON
 python main.py --seed "paypal-login-secure.com" --output results.json
 
-# Export as STIX 2.1 bundle
+# Export a STIX 2.1 bundle
 python main.py --seed "db349b97c37d22f5ea1d1841e3c89eb4" --export-stix investigation.json
 
-# Override pivot depth
+# Override pivot depth (default 3)
 python main.py --seed "suspicious-domain.com" --depth 5
 
 # Enable SpiderFoot for email and username seeds
 python main.py --seed "analyst@example.com" --deep
 ```
-
-### MCP Server
-
-The engine also runs as an MCP server, so you can drive it conversationally from Claude Code or Claude Desktop. `.mcp.json` is included; point the paths at your checkout and reconnect your client.
-
-| Tool | Purpose |
-|------|---------|
-| `investigate` | Full pivot chain, returns scores, findings and summary |
-| `detect_indicator_type` | Classify an indicator with no network calls |
-| `get_raw_pivot_data` | Drill into one connector's raw output from a cached run |
-| `export_stix` | Write a STIX 2.1 bundle for a completed investigation |
-
-Raw connector payloads are omitted from `investigate` and cached instead, so drilling into detail never re-spends rate-limited API quota.
 
 ---
 
@@ -167,73 +191,55 @@ in the wild.
 
 ---
 
-## Setup
+## Optional: MCP Server
 
-**Requirements**
+The CLI above is the primary interface and needs nothing beyond Python and API keys. If you happen to use Claude Code or Claude Desktop, the engine also runs as an MCP server so you can drive it conversationally. This is a convenience layer, not a requirement.
 
-- Python 3.10+
-- API keys for: Anthropic, VirusTotal, Shodan, Censys, abuse.ch, AlienVault OTX
+`.mcp.json` is included — point the paths at your checkout and reconnect your client.
 
-**Install**
+| Tool | Purpose |
+|------|---------|
+| `investigate` | Full pivot chain, returns scores, findings, and summary |
+| `detect_indicator_type` | Classify an indicator with no network calls |
+| `get_raw_pivot_data` | Drill into one connector's raw output from a cached run |
+| `export_stix` | Write a STIX 2.1 bundle for a completed investigation |
 
-```bash
-git clone https://github.com/Edi-San24/osint-pivot-engine
-cd osint-pivot-engine
-pip install -r requirements.txt
-playwright install chromium
-```
+Raw connector payloads are cached rather than returned, so drilling into detail never re-spends rate-limited quota.
 
-To retrain the scoring models, also install the training extras:
+---
+
+## Development
+
+To retrain the scoring models:
 
 ```bash
 pip install -r requirements-dev.txt
+python -m core.trainer
 ```
 
-**Configure**
-
-Copy `.env.example` to `.env` and fill in your keys:
-
-```
-ANTHROPIC_API_KEY=
-VIRUSTOTAL_API_KEY=
-SHODAN_API_KEY=
-CENSYS_API_KEY=
-THREATFOX_API_KEY=
-OTX_API_KEY=
-WHOISXML_API_KEY=
-```
-
-The MITRE ATT&CK STIX bundle downloads and caches to `data/` on first run.
-
-**Run**
-
-```bash
-python main.py --seed "your-indicator-here"
-```
+Training data collection lives in `scripts/collect_training_data.py`. Experiment tracking runs through MLflow.
 
 ---
 
 ## Project Status
 
-Active development. Core pipeline is complete and tested against live threat infrastructure.
+Active development. The core pipeline is complete and tested against live threat infrastructure.
 
 **Complete**
 
-- LangGraph agent with stateful pivot loop and autonomous queue management
+- Stateful pivot loop with autonomous queue management and deduplication
 - Eleven connectors wired and tested
 - Deterministic findings extraction across all sources
 - Threat group profiling with MITRE-classified malware chaining
-- Hash pivot chaining via MalwareBazaar tag clustering
-- Layered ML, graph, temporal and context confidence scoring, calibrated against the real ATT&CK group distribution
+- Hash pivot chaining via malware family tag clustering
+- Layered ML, graph, temporal, and context scoring, calibrated against measured distributions
+- Early warning detection across the full pivot chain
 - MCP server for Claude Code and Claude Desktop
+- STIX 2.1 export and JSON output
 - MLflow experiment tracking
-- STIX 2.1 export
-- Rich CLI with color-coded risk levels and JSON export
-- Dark web connector via Playwright headless browser
 
 **Roadmap**
 
-- PyPI packaging
-- Broaden threat group chaining beyond the top-ranked tooling
+- Broaden threat group chaining beyond top-ranked tooling
 - Retrain scoring models on an expanded labelled set
 - Test suite

@@ -22,6 +22,7 @@ from core.graph_scorer import GraphScorer
 from core.temporal_scorer import TemporalScorer
 from core.ner_extractor import NERExtractor
 from core.detector import detect_type
+from core.risk import NON_INFRASTRUCTURE_TYPES
  
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
@@ -230,9 +231,10 @@ def extract_findings(result: dict) -> list[str]:
     bazaar = results.get("malwarebazaar", {})
     if bazaar.get("found") and "samples" in bazaar:
         samples = bazaar.get("samples", [])
+        total = bazaar.get("sample_count", len(samples))
+        qualifier = "+" if bazaar.get("count_at_api_ceiling") else ""
         findings.append(
-            f"{indicator}: MalwareBazaar has "
-            f"{bazaar.get('sample_count', len(samples))} matching samples."
+            f"{indicator}: MalwareBazaar has {total}{qualifier} matching samples."
         )
         families = sorted({
             s.get("malware_family") for s in samples
@@ -403,19 +405,29 @@ def apply_context(state: AgentState) -> AgentState:
     raw = scorer.score_any(pivot_result)
     ml_score = raw.get("confidence_score", 0.0)
  
-    if indicator_type in {"threat_group", "software", "email", "username", "filename"}:
+    if indicator_type in NON_INFRASTRUCTURE_TYPES:
         graph_score = 0.0
         temporal_score = 0.0
-        early_warning = False
     else:
         graph_scores = graph_scorer.score_all(state["pivot_results"])
         graph_score = graph_scores.get(state["seed"], 0.0)
- 
+
         temporal_result = temporal_scorer.score(pivot_result)
         temporal_score = temporal_result.get("temporal_score", 0.0)
-        early_warning = temporal_result.get("early_warning", False)
- 
-    if indicator_type in {"threat_group", "software", "email", "username", "filename"}:
+
+    # Early warning is scanned across every pivot, not just the seed. The signal
+    # comes from related-sample recency, which only exists on hash pivots — so a
+    # threat group seed that chains into fresh samples would otherwise never
+    # raise it, despite that being exactly the case worth flagging.
+    early_warning_indicator = ""
+    for pivot in state["pivot_results"]:
+        if pivot.get("type") in NON_INFRASTRUCTURE_TYPES:
+            continue
+        if temporal_scorer.score(pivot).get("early_warning"):
+            early_warning_indicator = pivot.get("indicator", "")
+            break
+
+    if indicator_type in NON_INFRASTRUCTURE_TYPES:
         blended_score = ml_score
     else:
         blended_score = graph_scorer.blend_scores(ml_score, graph_score)
@@ -429,9 +441,10 @@ def apply_context(state: AgentState) -> AgentState:
     state["context_score"] = round(context_score, 4)
     state["infrastructure_type"] = context.get("infrastructure_type", "unknown")
  
-    if early_warning:
+    if early_warning_indicator:
         state["findings"].append(
-            "EARLY WARNING: Related malware samples detected within the last 7 days — active campaign signal."
+            f"EARLY WARNING: Related malware samples for {early_warning_indicator} "
+            "detected within the last 7 days — active campaign signal."
         )
  
     logger.info(f"ML: {blended_score} | Graph: {graph_score} | Temporal: {temporal_score} | Context: {context_score}")

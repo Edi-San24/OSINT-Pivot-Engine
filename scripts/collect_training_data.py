@@ -18,9 +18,13 @@ from core.features import extract_features, FEATURE_COLUMNS
 from core.executor import PivotExecutor
 from config import DATA_DIR
 
-# Dedicated logger — avoids conflict with executor's logging config
+# Dedicated logger — avoids conflict with executor's logging config.
+# propagate=False is load-bearing: importing PivotExecutor runs
+# logging.basicConfig(), which attaches a handler to the root logger. Without
+# this, every record is emitted by both handlers and prints twice.
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+logger.propagate = False
 handler = logging.StreamHandler()
 handler.setLevel(logging.INFO)
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")

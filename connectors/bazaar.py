@@ -9,6 +9,11 @@ from config import MALWAREBAZAAR_API_KEY
 
 logger = logging.getLogger(__name__)
 
+# Signature lookups fetch more than they return: the payload stays small, but
+# scoring needs the true total, which it cannot recover from a truncated list.
+SIGNATURE_COUNT_LIMIT = 100
+SAMPLE_PAYLOAD_LIMIT = 10
+
 
 class MalwareBazaarConnector:
     """
@@ -178,9 +183,10 @@ class MalwareBazaarConnector:
         try:
             response = requests.post(
                 self.BASE_URL,
-                data={"query": "get_siginfo", "signature": signature, "limit": 10},
+                data={"query": "get_siginfo", "signature": signature,
+                      "limit": SIGNATURE_COUNT_LIMIT},
                 headers=self.headers,
-                timeout=15
+                timeout=20
             )
             response.raise_for_status()
             data = response.json()
@@ -194,14 +200,18 @@ class MalwareBazaarConnector:
                     "reason": data.get("query_status", "unknown")
                 }
 
-            samples = data.get("data", [])[:10]
+            all_samples = data.get("data", []) or []
+            samples = all_samples[:SAMPLE_PAYLOAD_LIMIT]
 
             return {
                 "indicator": signature,
                 "type": "signature",
                 "source": "malwarebazaar",
                 "found": True,
-                "sample_count": len(samples),
+                # True total, taken before truncation. Scoring must use this.
+                "sample_count": len(all_samples),
+                "samples_returned": len(samples),
+                "count_at_api_ceiling": len(all_samples) >= SIGNATURE_COUNT_LIMIT,
                 "samples": [
                     {
                         "sha256": s.get("sha256_hash", "unknown"),
