@@ -10,6 +10,17 @@ from config import MALWAREBAZAAR_API_KEY
 
 BASE_URL = "https://urlhaus-api.abuse.ch/v1"
 
+# URLhaus returns up to 1000 entries oldest-first, and we only keep a handful.
+# Taking the first N straight off the response yields long-dead infrastructure,
+# so live URLs get sorted to the front before truncating. Costs nothing extra:
+# the whole list is already in the response.
+URL_PAYLOAD_LIMIT = 10
+
+
+def _online_first(urls: list) -> list:
+    """Stable sort putting currently-online URLs ahead of offline ones."""
+    return sorted(urls, key=lambda u: u.get("url_status") != "online")
+
 
 class URLhausConnector:
     """
@@ -41,7 +52,9 @@ class URLhausConnector:
             response.raise_for_status()
             data = response.json()
 
-            if data.get("query_status") != "is_host":
+            # URLhaus answers "ok" on success and "no_results" when it has
+            # nothing. It does not return "is_host".
+            if data.get("query_status") != "ok":
                 return {
                     "indicator": host,
                     "type": "host",
@@ -50,7 +63,8 @@ class URLhausConnector:
                     "reason": data.get("query_status", "unknown")
                 }
 
-            urls = data.get("urls", [])[:10]
+            all_urls = data.get("urls", []) or []
+            urls = _online_first(all_urls)[:URL_PAYLOAD_LIMIT]
 
             return {
                 "indicator": host,
@@ -58,6 +72,7 @@ class URLhausConnector:
                 "source": "urlhaus",
                 "found": True,
                 "url_count": data.get("url_count", 0),
+                "online_count": sum(1 for u in all_urls if u.get("url_status") == "online"),
                 "blacklists": data.get("blacklists", {}),
                 "urls": [
                     {
@@ -91,7 +106,8 @@ class URLhausConnector:
             response.raise_for_status()
             data = response.json()
 
-            if data.get("query_status") != "is_tag":
+            # Same as query_host: "ok" on success, "no_results" when empty.
+            if data.get("query_status") != "ok":
                 return {
                     "indicator": family,
                     "type": "malware_family",
@@ -100,14 +116,16 @@ class URLhausConnector:
                     "reason": data.get("query_status", "unknown")
                 }
 
-            urls = data.get("urls", [])[:10]
+            all_urls = data.get("urls", []) or []
+            urls = _online_first(all_urls)[:URL_PAYLOAD_LIMIT]
 
             return {
                 "indicator": family,
                 "type": "malware_family",
                 "source": "urlhaus",
                 "found": True,
-                "url_count": len(urls),
+                "url_count": len(all_urls),
+                "online_count": sum(1 for u in all_urls if u.get("url_status") == "online"),
                 "urls": [
                     {
                         "url": u.get("url", "unknown"),
