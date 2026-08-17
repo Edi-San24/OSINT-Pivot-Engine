@@ -33,6 +33,10 @@ WHOISXML_API_KEY = os.getenv("WHOISXML_API_KEY", "")
 MALWAREBAZAAR_API_KEY = os.getenv("THREATFOX_API_KEY")
 OTX_API_KEY = os.getenv("OTX_API_KEY")
 
+# Single source of truth for the version string. The CLI banner, the help
+# header, and the MCP server declaration all read it from here.
+VERSION = "1.2.0"
+
 #Agent settings
 MAX_PIVOT_DEPTH = 3 # Amount of pivots the agent can make 
 MAX_RESULTS_PER_SOURCE = 10

@@ -9,3 +9,4 @@ __pycache__/
 org_profile.yaml
 ahmia_debug.html
 .DS_Store
+test_connectors.py

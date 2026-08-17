@@ -21,9 +21,13 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from mcp.server import MCPServer
 
+# config is cheap to import (no engine, no STIX bundle), so it is safe here.
+# The heavy imports stay behind _engine().
+from config import VERSION
+
 mcp = MCPServer(
     name="osint-pivot-engine",
-    version="1.2.0",
+    version=VERSION,
     instructions=(
         "Autonomous OSINT threat intelligence enrichment. Give investigate() a "
         "seed indicator (IP, domain, file hash, email, username, threat group, "

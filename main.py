@@ -12,6 +12,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich import box
 from core.agent import run_agent
 from core.stix_exporter import STIXExporter
+from config import VERSION
 from core.risk import (
     resolve_risk_level,
     score_to_risk,
@@ -65,16 +66,87 @@ def format_summary(summary) -> Text:
     return text
  
  
-@click.command()
-@click.option("--seed", required=True, help="The indicator to investigate (IP, domain, hash, email, or username)")
-@click.option("--output", default=None, help="Save full results to a JSON file")
-@click.option("--depth", default=None, type=int, help="Override max pivot depth")
-@click.option("--export-stix", default=None, help="Export investigation as STIX 2.1 bundle to given path")
-@click.option("--deep", is_flag=True, default=False, help="Enable SpiderFoot for email and username pivots")
-@click.option("--verbose", "-v", is_flag=True, default=False, help="Show how the score and risk level were derived")
-def run(seed, output, depth, export_stix, deep, verbose):
-    """OSINT Pivot Engine — autonomous threat intelligence enrichment tool."""
- 
+HELP_BANNER = f"""\
+   OSINT PIVOT ENGINE  v{VERSION}
+   ─────────────────────────────────────────────
+     seed ─┬─▶ ip ─────▶ domain ──▶ certificates
+           ├─▶ hash ───▶ samples ─▶ family
+           └─▶ group ──▶ tooling ─▶ live samples
+   ─────────────────────────────────────────────
+"""
+
+
+class BannerCommand(click.Command):
+    """Prints the pivot diagram above the usage line on --help."""
+
+    def format_help(self, ctx, formatter):
+        formatter.write(HELP_BANNER + "\n")
+        super().format_help(ctx, formatter)
+
+
+EXAMPLES = """
+\b
+Examples:
+  Investigate an IP address
+    main.py -s 185.220.101.45
+
+\b
+  Profile a threat group, chaining into live malware samples
+    main.py -s "Lazarus Group"
+
+\b
+  Save the full result and export a bundle for your TIP
+    main.py -s db349b97c37d22f5ea1d1841e3c89eb4 -o case.json --export-stix case-stix.json
+
+\b
+  Show how the score and risk level were reached
+    main.py -s 185.220.101.45 --verbose
+
+\b
+  Follow the chain further than the default three pivots
+    main.py -s suspicious-domain.com --depth 5
+"""
+
+
+@click.command(
+    cls=BannerCommand,
+    epilog=EXAMPLES,
+    context_settings={"help_option_names": ["-h", "--help"], "max_content_width": 96},
+)
+# Investigation
+@click.option("--seed", "-s", required=True, metavar="INDICATOR",
+              help="The indicator to investigate. See supported types above.")
+@click.option("--depth", default=None, type=int, metavar="N",
+              help="Maximum indicators to pivot through. Default 3.")
+@click.option("--deep", is_flag=True, default=False,
+              help="Add SpiderFoot enrichment. Email and username seeds only, and slow.")
+# Output
+@click.option("--output", "-o", default=None, metavar="PATH",
+              help="Write the full result, including raw connector output, to JSON.")
+@click.option("--export-stix", default=None, metavar="PATH",
+              help="Write a STIX 2.1 bundle for MISP, OpenCTI, or any TAXII platform.")
+# Display
+@click.option("--verbose", "-v", is_flag=True, default=False,
+              help="Show how the score and risk level were derived.")
+def run(seed, depth, deep, output, export_stix, verbose):
+    """
+    Autonomous threat intelligence enrichment.
+
+    Give it one indicator. It queries every relevant OSINT source in parallel,
+    follows the indicators it discovers, scores what it finds, and writes an
+    analyst summary.
+
+    \b
+    Supported indicators:
+      IPv4              185.220.101.45
+      Domain            paypal-login-secure.com
+      File hash         MD5, SHA1, or SHA256
+      Threat group      Lazarus Group
+      Malware family    WannaCry
+      Email             analyst@example.com
+      Username          threat_actor_handle
+    """
+
     if depth:
         import config
         config.MAX_PIVOT_DEPTH = depth
@@ -82,7 +154,7 @@ def run(seed, output, depth, export_stix, deep, verbose):
     banner = (
         "[cyan]══════════════════════════════════════[/cyan]\n"
         "[bold white]OSINT PIVOT ENGINE[/bold white]\n"
-        "[cyan]── Autonomous Threat Intelligence · v1.2.0[/cyan]\n"
+        f"[cyan]── Autonomous Threat Intelligence · v{VERSION}[/cyan]\n"
         "[cyan]══════════════════════════════════════[/cyan]\n"
         f"[dim]Seed: {seed}[/dim]"
     )
