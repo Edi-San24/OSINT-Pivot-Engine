@@ -8,3 +8,4 @@ __pycache__/
 .env
 org_profile.yaml
 ahmia_debug.html
+.DS_Store
