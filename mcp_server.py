@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+
 # mcp_server.py
 # MCP server exposing the OSINT Pivot Engine to MCP clients (Claude Code,
 # Claude Desktop). Wraps the existing LangGraph agent behind an investigate()
