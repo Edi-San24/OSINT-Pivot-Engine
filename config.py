@@ -33,6 +33,14 @@ WHOISXML_API_KEY = os.getenv("WHOISXML_API_KEY", "")
 MALWAREBAZAAR_API_KEY = os.getenv("THREATFOX_API_KEY")
 OTX_API_KEY = os.getenv("OTX_API_KEY")
 
+# SpiderFoot is a self-hosted service rather than a hosted API, so this is a
+# URL and not a key. Previously hardcoded in the connector, which meant the
+# setup wizard had nothing to write to.
+SPIDERFOOT_URL = os.getenv("SPIDERFOOT_URL", "http://127.0.0.1:5001")
+
+# Where the setup wizard writes collected credentials.
+ENV_PATH = str(PROJECT_ROOT / ".env")
+
 # Single source of truth for the version string. The CLI banner, the help
 # header, and the MCP server declaration all read it from here.
 VERSION = "1.2.0"

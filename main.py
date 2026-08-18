@@ -2,6 +2,8 @@
 # CLI entry point for project
 
 
+import sys
+
 import click
 import json
 from rich.console import Console
@@ -13,57 +15,10 @@ from rich import box
 from core.agent import run_agent
 from core.stix_exporter import STIXExporter
 from config import VERSION
-from core.risk import (
-    resolve_risk_level,
-    score_to_risk,
-    extract_threat_level,
-    NON_INFRASTRUCTURE_TYPES,
-)
+from core.risk import resolve_risk_level
+from core.render import build_metrics_table, format_summary, get_risk_color
  
 console = Console()
- 
- 
-def get_risk_color(risk_level: str) -> str:
-    if risk_level == "HIGH":
-        return "bold red"
-    elif risk_level == "MEDIUM":
-        return "bold yellow"
-    else:
-        return "bold green"
- 
- 
-def format_summary(summary) -> Text:
-    """
-    Formats the structured investigation summary for Rich terminal display.
-    Colors each section label for readability.
-    """
-    if not isinstance(summary, str):
-        summary = ""
- 
-    text = Text()
-    lines = summary.strip().split("\n")
- 
-    section_colors = {
-        "THREAT LEVEL:": "bold white",
-        "ASSESSMENT:": "bold cyan",
-        "KEY INDICATORS:": "bold cyan",
-        "VISIBILITY GAPS:": "bold yellow",
-        "RECOMMENDED ACTIONS:": "bold cyan",
-    }
- 
-    for line in lines:
-        stripped = line.strip()
-        matched = False
-        for label, color in section_colors.items():
-            if stripped.startswith(label):
-                text.append(label + " ", style=color)
-                text.append(stripped[len(label):].strip() + "\n")
-                matched = True
-                break
-        if not matched:
-            text.append(line + "\n")
- 
-    return text
  
  
 HELP_BANNER = f"""\
@@ -174,87 +129,7 @@ def run(seed, depth, deep, output, export_stix, verbose):
     risk_level = resolve_risk_level(result)
     risk_color = get_risk_color(risk_level)
  
-    table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
-    table.add_column("Field", style="dim")
-    table.add_column("Value")
- 
-    table.add_row("Pivots run", str(result['pivot_count']))
-    table.add_row("Findings", str(len(result['findings'])))
-
-    # One score: the context-adjusted one, since that is what feeds the risk
-    # level. When the context layer moved it, the reason goes inline rather
-    # than into a second row the reader has to reconcile.
-    infrastructure = result['infrastructure_type']
-    adjusted = round(result['context_score'], 4) != round(result['ml_score'], 4)
-
-    if adjusted:
-        direction = "lowered" if result['context_score'] < result['ml_score'] else "raised"
-        table.add_row("Score", f"{result['context_score']}  [dim]({direction})[/dim]")
-    else:
-        table.add_row("Score", str(result['context_score']))
-
-    if infrastructure and infrastructure != "unknown":
-        table.add_row("Infrastructure", infrastructure)
-
-    # The agent's written verdict outranks the score on infrastructure pivots.
-    # Label it whenever the agent is the source, not only when it disagrees —
-    # a label that appears intermittently is its own kind of confusing.
-    agent_sourced = (
-        result.get('indicator_type', '') not in NON_INFRASTRUCTURE_TYPES
-        and extract_threat_level(result['summary']) is not None
-    )
-    if agent_sourced:
-        table.add_row(
-            "Risk Level",
-            f"[{risk_color}]{risk_level}[/{risk_color}]  [dim][Agent's Verdict][/dim]"
-        )
-    else:
-        table.add_row("Risk Level", f"[{risk_color}]{risk_level}[/{risk_color}]")
-
-    if verbose:
-        table.add_row("", "")
-        table.add_row("[dim]Base score[/dim]", f"[dim]{result['ml_score']}[/dim]")
-        delta = round(result['context_score'] - result['ml_score'], 4)
-        table.add_row(
-            "[dim]Context modifier[/dim]",
-            f"[dim]{delta:+} ({infrastructure})[/dim]"
-        )
-        table.add_row("[dim]Score-derived[/dim]", f"[dim]{score_to_risk(result['context_score'])}[/dim]")
-        agent_verdict = extract_threat_level(result['summary']) or "none stated"
-        table.add_row("[dim]Agent verdict[/dim]", f"[dim]{agent_verdict}[/dim]")
-
-    # Org relevance — absent entirely unless an org profile is configured.
-    # Ordered by urgency: an indicator that is your own host outranks
-    # everything else in this table.
-    relevance_styles = [
-        ("OWN ASSET", "bold red", "red"),
-        ("BRAND ABUSE", "bold yellow", "yellow"),
-        ("ORG RELEVANCE", "bold cyan", "cyan"),
-        ("COVERAGE GAP", "dim", "dim"),
-    ]
-    relevance_hits = [
-        (prefix, label_style, value_style, finding)
-        for prefix, label_style, value_style in relevance_styles
-        for finding in result['findings'] if finding.startswith(prefix)
-    ]
-    if relevance_hits:
-        table.add_row("", "")
-        for prefix, label_style, value_style, finding in relevance_hits[:5]:
-            table.add_row(
-                f"[{label_style}]{prefix}[/{label_style}]",
-                f"[{value_style}]{finding[len(prefix) + 2:]}[/{value_style}]"
-            )
-
-    # Early warning
-    early_warnings = [f for f in result['findings'] if "EARLY WARNING" in f]
-    if early_warnings:
-        table.add_row("", "")
-        table.add_row("[bold red]EARLY WARNING[/bold red]", f"[red]{early_warnings[0]}[/red]")
- 
-    # NER actor recommendations
-    ner_notes = [f for f in result['findings'] if "Threat actors mentioned" in f]
-    if ner_notes:
-        table.add_row("[bold yellow]NER[/bold yellow]", f"[yellow]{ner_notes[0]}[/yellow]")
+    table = build_metrics_table(result, verbose=verbose)
  
     console.print(table)
  
@@ -280,5 +155,11 @@ def run(seed, depth, deep, output, export_stix, verbose):
  
  
 if __name__ == "__main__":
-    run()
+    # No arguments means interactive use, so launch the TUI. Any flag at all
+    # keeps the Click CLI, which is what scripts and the MCP server rely on.
+    if len(sys.argv) == 1:
+        from tui import launch
+        launch()
+    else:
+        run()
  

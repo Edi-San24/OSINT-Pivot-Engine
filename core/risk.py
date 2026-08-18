@@ -10,6 +10,17 @@ NON_INFRASTRUCTURE_TYPES = {
     "threat_group", "software", "email", "username", "filename"
 }
 
+# Types whose own scorer is authoritative, so the agent must not overrule it.
+# Deliberately narrower than the set above.
+#
+# score_threat_group and score_software are calibrated against measured ATT&CK
+# and MalwareBazaar distributions, so they mean something. score_identity is
+# min(finding_count / 50, 1.0) — a measure of how much SpiderFoot returned, not
+# of how dangerous the identity is. One finding scores 0.02 whether the handle
+# belongs to nobody or to a ransomware group's spokesperson, which is exactly
+# where the agent's judgement is worth more than the number.
+SCORER_AUTHORITATIVE_TYPES = {"threat_group", "software"}
+
 
 def score_to_risk(score: float) -> str:
     """Maps a context score to HIGH / MEDIUM / LOW."""
@@ -44,10 +55,11 @@ def extract_threat_level(summary: str) -> str | None:
 def resolve_risk_level(result: dict) -> str:
     """
     Final risk level for a completed investigation. Starts from the context
-    score; the agent's verdict overrides it for infrastructure pivots only.
+    score; the agent's verdict overrides it unless that indicator's own scorer
+    is authoritative.
     """
     risk = score_to_risk(result.get("context_score", 0.0))
-    if result.get("indicator_type", "") not in NON_INFRASTRUCTURE_TYPES:
+    if result.get("indicator_type", "") not in SCORER_AUTHORITATIVE_TYPES:
         agent_level = extract_threat_level(result.get("summary", ""))
         if agent_level:
             risk = agent_level
