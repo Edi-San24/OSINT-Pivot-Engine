@@ -3,7 +3,7 @@
 > Drop in one indicator. Get back a scored, cross-referenced threat assessment.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
-![CLI](https://img.shields.io/badge/Interface-CLI-brightgreen)
+![Interface](https://img.shields.io/badge/Interface-TUI%20%2B%20CLI-brightgreen)
 ![Connectors](https://img.shields.io/badge/Connectors-11-blue)
 ![MCP](https://img.shields.io/badge/MCP-optional-purple)
 ![License](https://img.shields.io/badge/License-MIT-lightgrey)
@@ -29,12 +29,12 @@ Solo analysts, small SOCs without a commercial TIP budget, students, CTF players
 
 ## What It Does
 
-- **Automated pivot chaining** — one seed indicator fans out across eleven sources in parallel, then follows what it finds: IPs to domains, domains to certificates, hashes to related samples, all without input
-- **Threat group profiling that doesn't dead-end** — query an adversary by name for full ATT&CK technique mappings, aliases, and tooling, then watch it chain that group's malware into MalwareBazaar to surface samples circulating right now. Living-off-the-land binaries are filtered out using MITRE's own software classification, so pivots aren't wasted on `netsh` and `ipconfig`
-- **Layered confidence scoring** — an ML score from features trained on real ThreatFox IOCs, blended with a graph score from relationship topology and a temporal score for campaign recency, then adjusted down for shared infrastructure like CDNs and Tor exits
-- **Early warning** — flags when related samples anywhere in the pivot chain were captured within the last seven days, which usually means an active campaign rather than a historical artifact
-- **Deterministic findings** — every finding is read directly from connector output, so two runs on the same data produce the same findings. The only model call in an investigation is the closing summary
-- **STIX 2.1 export** — hand any investigation to MISP, OpenCTI, Splunk, or any TAXII-compatible platform
+- **Automated pivot chaining**: one seed indicator fans out across eleven sources in parallel, then follows what it finds: IPs to domains, domains to certificates, hashes to related samples, all without input
+- **Threat group profiling that doesn't dead-end**: query an adversary by name for full ATT&CK technique mappings, aliases, and tooling, then watch it chain that group's malware into MalwareBazaar to surface samples circulating right now. Living-off-the-land binaries are filtered out using MITRE's own software classification, so pivots aren't wasted on `netsh` and `ipconfig`
+- **Layered confidence scoring**: an ML score from features trained on real ThreatFox IOCs, blended with a graph score from relationship topology and a temporal score for campaign recency, then adjusted down for shared infrastructure like CDNs and Tor exits
+- **Early warning**: flags when related samples anywhere in the pivot chain were captured within the last seven days, which usually means an active campaign rather than a historical artifact
+- **Deterministic findings**: every finding is read directly from connector output, so two runs on the same data produce the same findings. The only model call in an investigation is the closing summary
+- **STIX 2.1 export**: hand any investigation to MISP, OpenCTI, Splunk, or any TAXII-compatible platform
 
 ---
 
@@ -65,7 +65,7 @@ Analyst summary (single LLM call)
 Terminal output, JSON, or STIX 2.1 bundle
 ```
 
-The pivot loop itself is plain Python — no model decides where to go next. That keeps runs reproducible, fast, and cheap: one API call per investigation regardless of depth.
+The pivot loop itself is plain Python. No model decides where to go next, which keeps runs reproducible, fast, and cheap: one API call per investigation regardless of depth.
 
 ---
 
@@ -121,17 +121,35 @@ playwright install chromium
 
 **Configure**
 
-```bash
-cp .env.example .env
-```
-
-Then fill in your keys. The MITRE ATT&CK STIX bundle downloads and caches to `data/` automatically on first run.
-
-**Run**
+Just start it. If `.env` is missing or a required key is blank, a setup wizard walks you through the credentials one at a time, marks which are required, says what each one is for, and writes `.env` for you.
 
 ```bash
-python main.py --seed "your-indicator-here"
+python main.py
 ```
+
+Required: VirusTotal, MalwareBazaar (abuse.ch), OTX. Optional: Anthropic (writes the summary), Shodan, Censys, SpiderFoot. Anything you skip just means those lookups return nothing.
+
+If you would rather do it by hand, copy `.env.example` to `.env` and fill it in. The MITRE ATT&CK STIX bundle downloads and caches to `data/` on first run either way.
+
+---
+
+## Interfaces
+
+Three ways in, all driving the same engine.
+
+**Terminal UI.** Run with no arguments. Full screen, three panels: what to investigate, results, and recent history you can click to reload. Every option below is a toggle or a dropdown, so you do not need to remember flags.
+
+```bash
+python main.py
+```
+
+**CLI.** Pass any flag and you get the non-interactive version, which is what you want for scripting or piping results somewhere.
+
+```bash
+python main.py --seed "185.220.101.45"
+```
+
+**MCP server.** Optional, for Claude Code and Claude Desktop. See the section near the end.
 
 ---
 
@@ -159,6 +177,17 @@ python main.py --seed "analyst@example.com" --deep
 # Show how the score and risk level were derived
 python main.py --seed "185.220.101.45" --verbose
 ```
+
+In the terminal UI, the same options are toggles. A few keys worth knowing:
+
+| Key | Does |
+|-----|------|
+| `Enter` | Run the investigation |
+| `ctrl+p` | List every pivotable indicator found, pick one to investigate next |
+| `ctrl+shift+c` | Copy the selected text (drag to select) |
+| `ctrl+a` | Select the whole results panel |
+| `ctrl+l` | Clear results |
+| `Escape` | Quit |
 
 ---
 
@@ -237,7 +266,7 @@ If you skip this entirely, nothing above appears and the engine works exactly as
 
 The CLI above is the primary interface and needs nothing beyond Python and API keys. If you happen to use Claude Code or Claude Desktop, the engine also runs as an MCP server so you can drive it conversationally. This is a convenience layer, not a requirement.
 
-`.mcp.json` is included — point the paths at your checkout and reconnect your client.
+`.mcp.json` is included. Point the paths at your checkout and reconnect your client.
 
 | Tool | Purpose |
 |------|---------|
@@ -269,6 +298,7 @@ Active development. The core pipeline is complete and tested against live threat
 
 **Complete**
 
+- Terminal UI with first-run setup wizard, history, and click-to-pivot
 - Stateful pivot loop with autonomous queue management and deduplication
 - Eleven connectors wired and tested
 - Deterministic findings extraction across all sources
