@@ -11,10 +11,10 @@ from rich.table import Table
 from rich.text import Text
 
 from core.risk import (
-    SCORER_AUTHORITATIVE_TYPES,
     extract_threat_level,
     resolve_risk_level,
     score_to_risk,
+    verdict_source,
 )
 
 # Section labels the agent writes, and the colour each gets on screen.
@@ -41,6 +41,10 @@ def get_risk_color(risk_level: str) -> str:
         return "bold red"
     if risk_level == "MEDIUM":
         return "bold yellow"
+    # Not green — green means a clean result, and the point of UNKNOWN is that
+    # we do not have one.
+    if risk_level == "UNKNOWN":
+        return "bold cyan"
     return "bold green"
 
 
@@ -90,19 +94,23 @@ def build_metrics_table(result: dict, verbose: bool = False) -> Table:
     if infrastructure and infrastructure != "unknown":
         table.add_row("Infrastructure", infrastructure)
 
-    # The agent's written verdict outranks the score on infrastructure pivots.
-    # Label it whenever the agent is the source, not only when it disagrees.
-    agent_sourced = (
-        result.get("indicator_type", "") not in SCORER_AUTHORITATIVE_TYPES
-        and extract_threat_level(result.get("summary", "")) is not None
-    )
-    if agent_sourced:
-        table.add_row(
-            "Risk Level",
-            f"[{risk_color}]{risk_level}[/{risk_color}]  [dim][Agent's Verdict][/dim]",
-        )
+    # Always say which source the level came from. Nothing was collected, the
+    # agent's verdict won, or the scorer overruled it — and that last case used
+    # to print a bare LOW next to a summary reading HIGH with no explanation.
+    agent_level = extract_threat_level(result.get("summary", ""))
+    decided_by = verdict_source(result)
+
+    if decided_by == "no_data":
+        label = "[No data collected]"
+    elif decided_by == "agent":
+        label = "[Agent's Verdict]"
+    elif agent_level and agent_level != risk_level:
+        label = f"[Score-derived; agent said {agent_level}]"
     else:
-        table.add_row("Risk Level", f"[{risk_color}]{risk_level}[/{risk_color}]")
+        label = ""
+
+    suffix = f"  [dim]{label}[/dim]" if label else ""
+    table.add_row("Risk Level", f"[{risk_color}]{risk_level}[/{risk_color}]{suffix}")
 
     if verbose:
         table.add_row("", "")

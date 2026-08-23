@@ -34,7 +34,10 @@ def score_to_risk(score: float) -> str:
 def extract_threat_level(summary: str) -> str | None:
     """
     Pulls the THREAT LEVEL verdict out of the agent's structured summary.
-    Returns HIGH, MEDIUM, LOW, or None if the line is absent.
+    Returns HIGH, MEDIUM, LOW, UNKNOWN, or None if the line is absent.
+
+    UNKNOWN was discarded here as unparseable, which fell back to the score. A
+    0.0 then rendered LOW, so "cannot tell" and "clean" looked identical.
     """
     if not isinstance(summary, str):
         return None
@@ -45,22 +48,53 @@ def extract_threat_level(summary: str) -> str | None:
         # Read the token straight after the label, not the whole line — the
         # trailing verdict prose can contain other level words.
         verdict = stripped[len("THREAT LEVEL:"):].strip().upper()
-        for level in ["HIGH", "MEDIUM", "LOW"]:
+        for level in ["HIGH", "MEDIUM", "LOW", "UNKNOWN"]:
             if verdict.startswith(level):
                 return level
-        return None  # UNKNOWN or unparseable — fall back to the score
+        return None  # Unparseable — fall back to the score
     return None
+
+
+def has_evidence(result: dict) -> bool:
+    """
+    Whether the investigation collected anything to reason about.
+    A 0.0 from a run that reached no source measures our visibility, not the
+    indicator's safety, and must not show as LOW — analysts read LOW as clean.
+    """
+    if result.get("error"):
+        return False
+    if result.get("insufficient_data"):
+        return False
+    if result.get("pivot_count", 0) == 0:
+        return False
+    return True
 
 
 def resolve_risk_level(result: dict) -> str:
     """
     Final risk level for a completed investigation. Starts from the context
     score; the agent's verdict overrides it unless that indicator's own scorer
-    is authoritative.
+    is authoritative. UNKNOWN comes ahead of both — neither means anything
+    without inputs.
     """
+    if not has_evidence(result):
+        return "UNKNOWN"
+
     risk = score_to_risk(result.get("context_score", 0.0))
     if result.get("indicator_type", "") not in SCORER_AUTHORITATIVE_TYPES:
         agent_level = extract_threat_level(result.get("summary", ""))
         if agent_level:
             risk = agent_level
     return risk
+
+
+def verdict_source(result: dict) -> str:
+    """
+    Which input decided the level: "no_data", "agent", or "scorer".
+    Shared so the metrics table and the verdict log cannot drift apart.
+    """
+    if not has_evidence(result):
+        return "no_data"
+    if result.get("indicator_type", "") in SCORER_AUTHORITATIVE_TYPES:
+        return "scorer"
+    return "agent" if extract_threat_level(result.get("summary", "")) else "scorer"
