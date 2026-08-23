@@ -46,6 +46,27 @@ mcp = MCPServer(
 # not have to re-run a slow, rate-limited pivot chain.
 _INVESTIGATIONS: dict[str, dict] = {}
 
+
+def _cache_key(seed: str) -> str:
+    """
+    Investigations are cached case-insensitively. An investigate("Lazarus Group")
+    followed by get_raw_pivot_data("lazarus group") is the same investigation,
+    and reporting it as uncached would send the caller back through a 15-40
+    second rate-limited chain over nothing but capitalisation.
+    """
+    return seed.strip().lower()
+
+
+def _cached(seed: str) -> dict | None:
+    return _INVESTIGATIONS.get(_cache_key(seed))
+
+
+def _cached_seeds() -> list[str]:
+    """Cached seeds as originally spelled, for error messages."""
+    return sorted(
+        result.get("indicator", key) for key, result in _INVESTIGATIONS.items()
+    )
+
 # Engine modules are imported on first use, not at module import — see _engine().
 _MODULES: dict = {}
 
@@ -165,7 +186,7 @@ def investigate(seed: str, depth: int = 3, deep: bool = False) -> dict:
     finally:
         config.MAX_PIVOT_DEPTH = original_depth
 
-    _INVESTIGATIONS[seed] = result
+    _INVESTIGATIONS[_cache_key(seed)] = result
 
     return {
         "seed": seed,
@@ -204,17 +225,18 @@ def get_raw_pivot_data(seed: str, source: str = "", indicator: str = "") -> dict
             malwarebazaar_related, ahmia, or spiderfoot. Strongly recommended.
         indicator: Restrict to one pivoted indicator instead of the whole chain.
     """
-    result = _INVESTIGATIONS.get(seed)
+    result = _cached(seed)
     if result is None:
         return {
             "error": f"No investigation cached for '{seed}'.",
-            "available": sorted(_INVESTIGATIONS.keys()),
+            "available": _cached_seeds(),
             "hint": "Call investigate(seed) first.",
         }
 
     pivots = result.get("full_results", [])
     if indicator:
-        pivots = [p for p in pivots if p.get("indicator") == indicator]
+        wanted = indicator.strip().lower()
+        pivots = [p for p in pivots if (p.get("indicator") or "").lower() == wanted]
         if not pivots:
             return {
                 "error": f"'{indicator}' was not pivoted in this investigation.",
@@ -268,11 +290,11 @@ def export_stix(seed: str, output_path: str = "") -> dict:
             project root. Defaults to <seed>_stix.json.
     """
     engine = _engine()
-    result = _INVESTIGATIONS.get(seed)
+    result = _cached(seed)
     if result is None:
         return {
             "error": f"No investigation cached for '{seed}'.",
-            "available": sorted(_INVESTIGATIONS.keys()),
+            "available": _cached_seeds(),
             "hint": "Call investigate(seed) first.",
         }
 

@@ -388,7 +388,7 @@ class MainScreen(Screen):
         view = self.query_one("#history", ListView)
         view.clear()
         for entry in self.history[:HISTORY_LIMIT]:
-            colour = get_risk_color(entry.get("risk_level", "LOW")).replace("bold ", "")
+            colour = get_risk_color(entry.get("risk_level", "UNKNOWN")).replace("bold ", "")
             seed = entry.get("seed", "")
             # One line per entry. Two-line entries clipped in a short panel and
             # cost twice the rows for information that fits on one.
@@ -408,7 +408,7 @@ class MainScreen(Screen):
         if index is None or index >= len(self.history):
             return
         seed = self.history[index].get("seed", "")
-        cached = self.results_cache.get(seed) or self.history[index].get("result")
+        cached = self.results_cache.get(seed.lower()) or self.history[index].get("result")
         if cached:
             self._render_result(cached, replayed=True)
         else:
@@ -535,8 +535,14 @@ class MainScreen(Screen):
         )
 
     def _record(self, seed: str, result: dict) -> None:
-        self.results_cache[seed] = result
-        self.history = [h for h in self.history if h.get("seed") != seed]
+        # Keyed case-insensitively so re-running an indicator with different
+        # capitalisation replaces its history entry rather than sitting beside
+        # it as a second, identical-looking row.
+        self.results_cache[seed.lower()] = result
+        self.history = [
+            h for h in self.history
+            if h.get("seed", "").lower() != seed.lower()
+        ]
         self.history.insert(0, {
             "seed": seed,
             "risk_level": resolve_risk_level(result),
