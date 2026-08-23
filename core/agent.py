@@ -22,7 +22,7 @@ from core.graph_scorer import GraphScorer
 from core.temporal_scorer import TemporalScorer
 from core.ner_extractor import NERExtractor
 from core.detector import detect_type
-from core.risk import NON_INFRASTRUCTURE_TYPES
+from core.risk import NON_INFRASTRUCTURE_TYPES, DEFAULT_THRESHOLDS
 from core import disagreement
 from core.relevance import assess_relevance, load_profile
  
@@ -65,6 +65,8 @@ class AgentState(TypedDict):
     # No source answered, so context_score is an absence rather than a low
     # reading. core.risk turns this into UNKNOWN.
     insufficient_data: bool
+    # Per-type thresholds from the scorer, reapplied by core.risk.
+    risk_thresholds: list
  
  
 def is_ipv4(value: str) -> bool:
@@ -505,6 +507,11 @@ def apply_context(state: AgentState) -> AgentState:
     # The scorers say UNKNOWN when they had nothing, but only confidence_score
     # propagates from here, so that verdict was being dropped. Either way the
     # score below measures our visibility, not the indicator.
+    # The thresholds are calibrated per indicator type. Carried through so
+    # core.risk can reapply them to the context-adjusted score instead of
+    # falling back to one global pair and contradicting the scorer.
+    state["risk_thresholds"] = raw.get("thresholds") or list(DEFAULT_THRESHOLDS)
+
     state["insufficient_data"] = (
         raw.get("risk_level") == "UNKNOWN"
         or bool(pivot_result.get("error"))
@@ -692,6 +699,7 @@ def run_agent(seed: str, deep: bool = False) -> dict:
         # Assumed until apply_context scores something. A run that never gets
         # that far has collected nothing by definition.
         "insufficient_data": True,
+        "risk_thresholds": list(DEFAULT_THRESHOLDS),
     }
  
     graph = StateGraph(AgentState)
@@ -724,6 +732,7 @@ def run_agent(seed: str, deep: bool = False) -> dict:
         "relevance_level": final_state["relevance_level"],
         "context_note": final_state["context_note"],
         "insufficient_data": final_state["insufficient_data"],
+        "risk_thresholds": final_state["risk_thresholds"],
         "full_results": final_state["pivot_results"],
         "visited": final_state["visited"],
         "indicator": seed,

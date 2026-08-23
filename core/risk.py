@@ -22,13 +22,38 @@ NON_INFRASTRUCTURE_TYPES = {
 SCORER_AUTHORITATIVE_TYPES = {"threat_group", "software"}
 
 
-def score_to_risk(score: float) -> str:
-    """Maps a context score to HIGH / MEDIUM / LOW."""
-    if score >= 0.7:
+# Used when a result carries no thresholds of its own: anything saved before the
+# scorer started reporting them, and the ML path's own default.
+DEFAULT_THRESHOLDS = (0.7, 0.4)
+
+
+def score_to_risk(score: float, thresholds: tuple = DEFAULT_THRESHOLDS) -> str:
+    """Maps a score to HIGH / MEDIUM / LOW against the given thresholds."""
+    high, medium = thresholds
+    if score >= high:
         return "HIGH"
-    if score >= 0.4:
+    if score >= medium:
         return "MEDIUM"
     return "LOW"
+
+
+def thresholds_for(result: dict) -> tuple:
+    """
+    The thresholds the scorer used for this indicator type.
+
+    ConfidenceScorer calibrates these per type — (0.5, 0.25) for a community
+    scored group, (0.65, 0.4) for one in ATT&CK, (0.5, 0.3) for an identity —
+    and they used to be discarded here in favour of one global pair.
+    """
+    values = result.get("risk_thresholds")
+    if isinstance(values, (list, tuple)) and len(values) == 2:
+        return (values[0], values[1])
+    return DEFAULT_THRESHOLDS
+
+
+def score_level(result: dict) -> str:
+    """The level implied by the context score alone, on the right thresholds."""
+    return score_to_risk(result.get("context_score", 0.0), thresholds_for(result))
 
 
 def extract_threat_level(summary: str) -> str | None:
@@ -80,7 +105,7 @@ def resolve_risk_level(result: dict) -> str:
     if not has_evidence(result):
         return "UNKNOWN"
 
-    risk = score_to_risk(result.get("context_score", 0.0))
+    risk = score_level(result)
     if result.get("indicator_type", "") not in SCORER_AUTHORITATIVE_TYPES:
         agent_level = extract_threat_level(result.get("summary", ""))
         if agent_level:

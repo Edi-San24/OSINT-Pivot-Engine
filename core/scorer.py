@@ -59,6 +59,21 @@ class ConfidenceScorer:
         elif score >= medium:
             return "MEDIUM"
         return "LOW"
+
+    def _risk_fields(self, score: float, thresholds: tuple = (0.7, 0.4)) -> dict:
+        """
+        risk_level plus the thresholds used to reach it.
+
+        These are calibrated per indicator type and were being thrown away: only
+        confidence_score propagated, so the front end reapplied a global 0.7/0.4
+        and could disagree with the level reported here. A community-scored group
+        at 0.55 was HIGH to the scorer and MEDIUM on screen. Emitted as a list
+        because the value round-trips through JSON.
+        """
+        return {
+            "risk_level": self._risk_level(score, thresholds),
+            "thresholds": list(thresholds),
+        }
  
     def score(self, pivot_result: dict) -> dict:
         """
@@ -81,7 +96,7 @@ class ConfidenceScorer:
         return {
             "confidence_score": round(float(confidence_score), 4),
             "is_anomaly": is_anomaly,
-            "risk_level": self._risk_level(confidence_score),
+            **self._risk_fields(confidence_score),
             "features_used": features,
         }
  
@@ -162,7 +177,7 @@ class ConfidenceScorer:
         return {
             "confidence_score": score,
             "is_anomaly": False,
-            "risk_level": self._risk_level(score, thresholds=(0.5, 0.25)),
+            **self._risk_fields(score, thresholds=(0.5, 0.25)),
             "pulse_count": pulse_count,
             "distinct_authors": authors,
             "onion_mentions": onion_hits,
@@ -219,7 +234,7 @@ class ConfidenceScorer:
         return {
             "confidence_score": round(confidence_score, 4),
             "is_anomaly": False,
-            "risk_level": self._risk_level(confidence_score, thresholds=(0.65, 0.4)),
+            **self._risk_fields(confidence_score, thresholds=(0.65, 0.4)),
             "technique_count": technique_count,
             "software_count": software_count,
             "alias_count": alias_count,
@@ -265,7 +280,7 @@ class ConfidenceScorer:
         return {
             "confidence_score": round(confidence_score, 4),
             "is_anomaly": False,
-            "risk_level": self._risk_level(confidence_score, thresholds=(0.65, 0.4)),
+            **self._risk_fields(confidence_score, thresholds=(0.65, 0.4)),
             "sample_count": sample_count,
             "note": "Score derived from MalwareBazaar sample volume and malware category tags.",
         }
@@ -303,7 +318,7 @@ class ConfidenceScorer:
         return {
             "confidence_score": round(confidence_score, 4),
             "is_anomaly": False,
-            "risk_level": self._risk_level(confidence_score, thresholds=(0.5, 0.3)),
+            **self._risk_fields(confidence_score, thresholds=(0.5, 0.3)),
             "finding_count": finding_count,
             "note": "Score derived from SpiderFoot identity footprint breadth.",
         }

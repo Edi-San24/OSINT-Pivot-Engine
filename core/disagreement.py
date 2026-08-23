@@ -11,7 +11,7 @@ from config import DATA_DIR
 from core.risk import (
     extract_threat_level,
     resolve_risk_level,
-    score_to_risk,
+    score_level as level_from_score,
     verdict_source,
 )
 
@@ -30,7 +30,7 @@ def _row(result: dict) -> dict:
     """One record per investigation, enough to re-derive the decision."""
     context_score = result.get("context_score", 0.0)
     agent_level = extract_threat_level(result.get("summary", ""))
-    score_level = score_to_risk(context_score)
+    score_level = level_from_score(result)
     resolved = resolve_risk_level(result)
     decided_by = verdict_source(result)
 

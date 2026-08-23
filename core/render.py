@@ -13,7 +13,7 @@ from rich.text import Text
 from core.risk import (
     extract_threat_level,
     resolve_risk_level,
-    score_to_risk,
+    score_level,
     verdict_source,
 )
 
@@ -117,7 +117,7 @@ def build_metrics_table(result: dict, verbose: bool = False) -> Table:
         table.add_row("[dim]Base score[/dim]", f"[dim]{ml_score}[/dim]")
         delta = round(context_score - ml_score, 4)
         table.add_row("[dim]Context modifier[/dim]", f"[dim]{delta:+} ({infrastructure})[/dim]")
-        table.add_row("[dim]Score-derived[/dim]", f"[dim]{score_to_risk(context_score)}[/dim]")
+        table.add_row("[dim]Score-derived[/dim]", f"[dim]{score_level(result)}[/dim]")
         table.add_row(
             "[dim]Agent verdict[/dim]",
             f"[dim]{extract_threat_level(result.get('summary', '')) or 'none stated'}[/dim]",
