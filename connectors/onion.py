@@ -8,6 +8,12 @@ from config import MAX_RESULTS_PER_SOURCE
 
 logger = logging.getLogger(__name__)
 
+# Kept under core.executor.REQUEST_TIMEOUT so the fan-out timeout is the
+# outer bound and this connector fails on its own first.
+BROWSER_TIMEOUT_MS = 10000
+PAGE_TIMEOUT_MS = 8000
+
+
 class OnionConnector:
     """
     Dark web search connector using Playwright headless browser.
@@ -26,13 +32,19 @@ class OnionConnector:
 
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
+                # Launch and per-page defaults both need bounding. The page
+                # loads below were already capped, but an unbounded launch or a
+                # default-timeout action could hang the thread indefinitely,
+                # which stalled whole pivots for tens of minutes.
+                browser = p.chromium.launch(headless=True, timeout=BROWSER_TIMEOUT_MS)
                 page = browser.new_page()
+                page.set_default_timeout(PAGE_TIMEOUT_MS)
 
-                page.goto("https://ahmia.fi/", wait_until="networkidle", timeout=30000)
+                page.goto("https://ahmia.fi/", wait_until="networkidle",
+                          timeout=PAGE_TIMEOUT_MS)
                 page.fill("input#id_q", indicator)
                 page.press("input#id_q", "Enter")
-                page.wait_for_load_state("networkidle", timeout=30000)
+                page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
 
 
                 results = []
