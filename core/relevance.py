@@ -117,10 +117,18 @@ def _harvest(pivot_results: list) -> dict:
             if value:
                 hosting.add(str(value).lower())
 
-        # OTX carries the only structured targeting data in the pipeline
-        for pulse in results.get("otx", {}).get("pulses", []):
-            industries.update(i.lower() for i in pulse.get("industries", []) or [])
-            countries.update(c.lower() for c in pulse.get("targeted_countries", []) or [])
+        # OTX carries the only structured targeting data in the pipeline.
+        # Group pivots file theirs under otx_search, not otx.
+        for key in ("otx", "otx_search"):
+            for pulse in results.get(key, {}).get("pulses", []):
+                industries.update(i.lower() for i in pulse.get("industries", []) or [])
+                countries.update(c.lower() for c in pulse.get("targeted_countries", []) or [])
+
+        # Those structured fields are empty for hacktivist crews, so core.hacktivist
+        # parses targeting out of the pulse text instead.
+        hack = results.get("hacktivist", {})
+        industries.update(s.lower() for s in hack.get("target_sectors", []) or [])
+        countries.update(c.lower() for c in hack.get("target_countries", []) or [])
 
         mitre = results.get("mitre", {})
         for technique in mitre.get("techniques", []):

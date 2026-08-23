@@ -23,6 +23,7 @@ from core.temporal_scorer import TemporalScorer
 from core.ner_extractor import NERExtractor
 from core.detector import detect_type
 from core.risk import NON_INFRASTRUCTURE_TYPES
+from core import disagreement
 from core.relevance import assess_relevance, load_profile
  
 logging.basicConfig(level=logging.ERROR)
@@ -34,14 +35,14 @@ llm = ChatAnthropic(
     api_key=ANTHROPIC_API_KEY,
 )
  
+# Loaded once at import. None when no profile exists, which disables the layer.
+org_profile = load_profile()
+
 executor = PivotExecutor()
-scorer = ConfidenceScorer()
+scorer = ConfidenceScorer(org_profile=org_profile)
 graph_scorer = GraphScorer()
 temporal_scorer = TemporalScorer()
 ner_extractor = NERExtractor()
-
-# Loaded once at import. None when no profile exists, which disables the layer.
-org_profile = load_profile()
  
  
 class AgentState(TypedDict):
@@ -61,6 +62,9 @@ class AgentState(TypedDict):
     pivot_count: int
     deep: bool
     relevance_level: str
+    # No source answered, so context_score is an absence rather than a low
+    # reading. core.risk turns this into UNKNOWN.
+    insufficient_data: bool
  
  
 def is_ipv4(value: str) -> bool:
@@ -299,6 +303,54 @@ def extract_findings(result: dict) -> list[str]:
             "tooling is entirely living-off-the-land binaries."
         )
 
+    # OTX community reporting on a name. For groups ATT&CK does not profile,
+    # this is the only evidence the actor exists at all.
+    otx_search = results.get("otx_search", {})
+    if isinstance(otx_search, dict) and otx_search.get("found"):
+        findings.append(
+            f"{indicator}: named in {otx_search.get('pulse_count', 0)} OTX community "
+            f"pulses from {otx_search.get('distinct_authors', 0)} independent authors."
+        )
+        recent = [p.get("name", "") for p in otx_search.get("pulses", [])[:3] if p.get("name")]
+        if recent:
+            findings.append(f"{indicator}: community reporting — {'; '.join(recent)}.")
+        if otx_search.get("malware_families"):
+            findings.append(
+                f"{indicator}: tooling named in reporting — "
+                f"{', '.join(otx_search['malware_families'][:6])}."
+            )
+    elif isinstance(otx_search, dict) and "error" not in otx_search:
+        findings.append(f"{indicator}: no OTX community reporting found for this name.")
+
+    # Hacktivist read. Alignment and stated targeting are the whole picture for
+    # these crews — there is usually no malware to report.
+    hack = results.get("hacktivist", {})
+    if isinstance(hack, dict) and hack.get("is_hacktivist"):
+        basis = "on the known-crew roster" if hack.get("on_roster") else "from reporting"
+        findings.append(
+            f"{indicator}: assessed as a hacktivist crew ({basis}, "
+            f"{hack.get('confidence', 'unknown')} confidence)."
+        )
+        if hack.get("alignments"):
+            findings.append(
+                f"{indicator}: reported alignment — {', '.join(hack['alignments'][:3])}."
+            )
+        if hack.get("activities"):
+            findings.append(
+                f"{indicator}: observed activity — {', '.join(hack['activities'])}."
+            )
+        targets = []
+        if hack.get("target_sectors"):
+            targets.append(f"sectors {', '.join(hack['target_sectors'][:4])}")
+        if hack.get("target_countries"):
+            targets.append(f"countries {', '.join(hack['target_countries'][:4])}")
+        if targets:
+            findings.append(f"{indicator}: stated targeting — {'; '.join(targets)}.")
+        else:
+            findings.append(
+                f"{indicator}: no specific targeting named in available reporting."
+            )
+
     # MITRE ATT&CK — technique coverage and attribution.
     mitre = results.get("mitre", {})
     if mitre.get("found"):
@@ -394,6 +446,45 @@ def analyze_results(state: AgentState) -> AgentState:
     return state
  
  
+# How much the strongest chained pivot can lift a non-infrastructure seed score.
+#
+# Infrastructure seeds already get chain awareness from graph_scorer, which runs
+# across every pivot. Group, software and identity seeds skip it, so their score
+# came from the seed pivot alone. Moonstone Sleet scored 0.2498 on ATT&CK
+# coverage — 1 of 23 software entries — while four of its chained Qilin samples
+# came back unanimously malicious on VirusTotal, and none of that counted.
+#
+# Indirect evidence, since it is the tooling that was measured and not the actor,
+# so it lifts and never lowers.
+CHAIN_EVIDENCE_WEIGHT = 0.65
+
+
+def _apply_chain_evidence(seed_score: float, state: AgentState) -> tuple[float, dict]:
+    """
+    Lifts a seed score by the strongest score among the pivots chained off it.
+    Returns the new score and the pivot responsible, or an empty dict if the
+    chain found nothing.
+    """
+    best, source = 0.0, {}
+    for pivot in state["pivot_results"][1:]:
+        if pivot.get("error") or not pivot.get("results"):
+            continue
+        scored = scorer.score_any(pivot)
+        if scored.get("risk_level") == "UNKNOWN":
+            continue
+        score = scored.get("confidence_score", 0.0)
+        if score > best:
+            best = score
+            source = {"indicator": pivot.get("indicator", ""), "score": score}
+
+    if not source:
+        return seed_score, {}
+
+    # Saturating lift, so it approaches 1.0 without ever exceeding it.
+    lift = best * CHAIN_EVIDENCE_WEIGHT
+    return seed_score + (1 - seed_score) * lift, source
+
+
 def apply_context(state: AgentState) -> AgentState:
     """
     Runs the context layer on pivot results.
@@ -402,14 +493,24 @@ def apply_context(state: AgentState) -> AgentState:
     logger.info("Applying context layer...")
  
     if not state["pivot_results"]:
+        state["insufficient_data"] = True
         return state
- 
+
     pivot_result = state["pivot_results"][0]
     indicator_type = pivot_result.get("type", "")
- 
+
     raw = scorer.score_any(pivot_result)
     ml_score = raw.get("confidence_score", 0.0)
- 
+
+    # The scorers say UNKNOWN when they had nothing, but only confidence_score
+    # propagates from here, so that verdict was being dropped. Either way the
+    # score below measures our visibility, not the indicator.
+    state["insufficient_data"] = (
+        raw.get("risk_level") == "UNKNOWN"
+        or bool(pivot_result.get("error"))
+        or not pivot_result.get("results")
+    )
+
     if indicator_type in NON_INFRASTRUCTURE_TYPES:
         graph_score = 0.0
         temporal_score = 0.0
@@ -433,11 +534,19 @@ def apply_context(state: AgentState) -> AgentState:
             break
 
     if indicator_type in NON_INFRASTRUCTURE_TYPES:
-        blended_score = ml_score
+        blended_score, chain = _apply_chain_evidence(ml_score, state)
+        if chain:
+            state["findings"].append(
+                f"CHAIN EVIDENCE: {chain['indicator']} scored {chain['score']} on its own "
+                f"pivot, raising the {indicator_type} score from {ml_score} to "
+                f"{round(blended_score, 4)}."
+            )
+            # Chained evidence is data, whatever the seed pivot managed on its own.
+            state["insufficient_data"] = False
     else:
         blended_score = graph_scorer.blend_scores(ml_score, graph_score)
         blended_score = temporal_scorer.blend_with_ml(blended_score, temporal_score)
- 
+
     context = detect_infrastructure_type(pivot_result)
     modifier = context.get("confidence_modifier", 0.0)
     context_score = max(0.0, min(1.0, blended_score + modifier))
@@ -491,7 +600,13 @@ def summarize(state: AgentState) -> AgentState:
         "2. [Specific action]\n"
         "3. [Specific action if applicable]\n\n"
         "Write for a SOC analyst making a fast decision. Never fabricate data not in the results. "
-        "If a source errored, acknowledge the gap. No markdown headers with # symbols. No bold with **."
+        "If a source errored, acknowledge the gap. No markdown headers with # symbols. No bold with **.\n\n"
+        "Use UNKNOWN, not LOW, when no source returned data. LOW means checked and clean; "
+        "an empty result means we cannot see, and calling that LOW hides the gap.\n\n"
+        "If the results carry a hacktivist assessment, judge the crew on its alignment, its "
+        "activity, and who it says it targets. Having no malware is normal for these actors, "
+        "not reassuring — DDoS, defacement and hack-and-leak need none. Absent tooling is only "
+        "worth remarking on for an actor that would be expected to have some."
     )
  
     user_message = (
@@ -501,7 +616,10 @@ def summarize(state: AgentState) -> AgentState:
         f"Pivots run: {state['pivot_count']}\n"
         f"ML Score: {state['ml_score']}\n"
         f"Context Score: {state['context_score']}\n"
-        f"Infrastructure Type: {state['infrastructure_type']}\n\n"
+        f"Infrastructure Type: {state['infrastructure_type']}\n"
+        # Stated outright rather than left to be inferred from the scores, which
+        # read as low rather than absent.
+        f"Sources returned usable data: {'no' if state['insufficient_data'] else 'yes'}\n\n"
         f"Key findings:\n{findings_str}\n\n"
         f"Full results:\n{results_str}"
     )
@@ -571,6 +689,9 @@ def run_agent(seed: str, deep: bool = False) -> dict:
         "pivot_count": 0,
         "deep": deep,
         "relevance_level": "none",
+        # Assumed until apply_context scores something. A run that never gets
+        # that far has collected nothing by definition.
+        "insufficient_data": True,
     }
  
     graph = StateGraph(AgentState)
@@ -591,8 +712,8 @@ def run_agent(seed: str, deep: bool = False) -> dict:
  
     agent = graph.compile()
     final_state = agent.invoke(initial_state)
- 
-    return {
+
+    result = {
         "summary": final_state["summary"],
         "findings": final_state["findings"],
         "pivot_count": final_state["pivot_count"],
@@ -602,8 +723,15 @@ def run_agent(seed: str, deep: bool = False) -> dict:
         "indicator_type": final_state["indicator_type"],
         "relevance_level": final_state["relevance_level"],
         "context_note": final_state["context_note"],
+        "insufficient_data": final_state["insufficient_data"],
         "full_results": final_state["pivot_results"],
         "visited": final_state["visited"],
         "indicator": seed,
     }
+
+    # Logged here rather than in the front ends, so the CLI, TUI and MCP server
+    # all record exactly one row per investigation.
+    disagreement.record(result)
+
+    return result
  

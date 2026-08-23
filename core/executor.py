@@ -6,13 +6,16 @@
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeout
  
 import config
+from core import hacktivist
 from core.detector import detect_type
 from connectors.virustotal import VirusTotalConnector
 from connectors.shodan import ShodanConnector
 from connectors.censys import CensysConnector
 from connectors.whois import WHOISConnector
+from connectors.rdap import RDAPConnector
 from connectors.passivedns import PassiveDNSConnector
 from connectors.onion import OnionConnector
 from connectors.mitre import MITREConnector
@@ -27,7 +30,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
  
-REQUEST_TIMEOUT = 10
+# Ceiling on one pivot's whole connector fan-out. Wired into
+# _run_parallel; previously defined and never used.
+REQUEST_TIMEOUT = 25
 ALLOWED_TYPES = {
     "ipv4", "domain", "md5", "sha1", "sha256",
     "email", "username", "threat_group", "software"
@@ -43,22 +48,60 @@ CHAINABLE_TOOLS = {
 
 # Caps the MalwareBazaar lookups fired per threat group pivot.
 MAX_TOOLING_LOOKUPS = 5
+
+# Threat group discovery gets a longer ceiling than the default fan-out.
+# OTX pulse search measures 28-58s, which is slow but is the only source that
+# knows about actors ATT&CK has not profiled. Group pivots make no VirusTotal
+# calls and run three connectors, so the extra wait is affordable here and
+# nowhere else.
+GROUP_DISCOVERY_TIMEOUT = 75
  
  
-def _run_parallel(tasks: dict) -> dict:
+def _run_parallel(tasks: dict, timeout: int = None) -> dict:
     """
-    Runs a dict of {name: callable} in parallel using a thread pool.
-    Returns {name: result} preserving all results including errors.
+    Runs a dict of {name: callable} in parallel and returns {name: result},
+    keeping errors rather than dropping them.
+
+    The whole batch is bounded by REQUEST_TIMEOUT. Without it a single
+    connector that never returns blocks the entire pivot forever: measured
+    stalls of 42 and 29 minutes on a pivot that normally takes 5 seconds.
+    Connectors set their own per-request timeouts, but those do not cover a
+    hung browser launch or a socket that never completes a handshake.
+
+    timeout overrides that ceiling for a specific batch. Used only where a
+    source is known to be slow yet worth waiting for, rather than raising the
+    global bound and losing the protection everywhere else.
     """
+    timeout = REQUEST_TIMEOUT if timeout is None else timeout
     results = {}
-    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+    # Deliberately not a context manager. Its __exit__ calls
+    # shutdown(wait=True), which joins every thread, so a hung connector still
+    # blocks the return even once the timeout has produced its result.
+    pool = ThreadPoolExecutor(max_workers=len(tasks))
+    try:
         futures = {pool.submit(fn): name for name, fn in tasks.items()}
-        for future in as_completed(futures):
-            name = futures[future]
-            try:
-                results[name] = future.result()
-            except Exception as e:
-                results[name] = {"error": str(e)[:100], "source": name}
+        try:
+            for future in as_completed(futures, timeout=timeout):
+                name = futures[future]
+                try:
+                    results[name] = future.result(timeout=0)
+                except Exception as e:
+                    results[name] = {"error": str(e)[:100], "source": name}
+        except FuturesTimeout:
+            pass  # Whatever finished is kept; the rest are recorded below.
+
+        # Report stragglers as timeouts rather than leaving them absent, so a
+        # slow source stays distinguishable from one that returned nothing.
+        for future, name in futures.items():
+            if name not in results:
+                results[name] = {
+                    "error": f"timed out after {timeout}s",
+                    "source": name,
+                }
+    finally:
+        # Pending work is cancelled; work already running is abandoned, since
+        # Python cannot interrupt a blocked call. The pivot moves on either way.
+        pool.shutdown(wait=False, cancel_futures=True)
     return results
  
  
@@ -74,6 +117,7 @@ class PivotExecutor:
         self.vt = VirusTotalConnector()
         self.shodan = ShodanConnector()
         self.whois = WHOISConnector()
+        self.rdap = RDAPConnector()
         self.passivedns = PassiveDNSConnector()
         self.censys = CensysConnector()
         self.ahmia = OnionConnector()
@@ -126,7 +170,7 @@ class PivotExecutor:
  
         tasks = {
             "virustotal": lambda: self.vt.query_domain(domain),
-            "whois": lambda: self.whois.query_domain(domain),
+            "whois": lambda: self._registration(domain),
             "passivedns": lambda: self.passivedns.query_domain(domain),
             "censys": lambda: self.censys.query_domain_certificates(domain),
             "ahmia": lambda: self.ahmia.search(domain),
@@ -137,6 +181,39 @@ class PivotExecutor:
         results = _run_parallel(tasks)
         return {"indicator": domain, "type": "domain", "results": results}
  
+    def _registration(self, domain: str) -> dict:
+        """
+        Registration data, RDAP first and port-43 WHOIS as fallback.
+
+        ICANN has moved gTLDs onto RDAP and retired the port-43 requirement, and
+        RDAP returns structured JSON instead of free text needing a regex parse.
+        Many ccTLDs still publish no RDAP service though, so WHOIS stays rather
+        than being replaced.
+
+        Kept under the "whois" result key so saved investigations and the MCP
+        source filter keep working. The payload's own "source" says which
+        protocol actually answered.
+        """
+        result = self.rdap.query_domain(domain)
+        if "error" not in result:
+            return result
+
+        reason = result["error"]
+        logger.info(f"RDAP unavailable for {domain[:50]} ({reason[:60]}), trying WHOIS.")
+
+        fallback = self.whois.query_domain(domain)
+        if "error" in fallback:
+            # Neither answered. Report both, so the gap is not mistaken for a
+            # domain with no registration.
+            return {
+                "error": f"RDAP: {reason[:80]} | WHOIS: {str(fallback['error'])[:80]}",
+                "indicator": domain,
+                "source": "rdap+whois",
+            }
+
+        fallback["fallback_from_rdap"] = reason
+        return fallback
+
     def pivot_hash(self, hash_val: str, deep: bool = False) -> dict:
         """
         Queries VirusTotal and MalwareBazaar for a file hash indicator.
@@ -218,10 +295,40 @@ class PivotExecutor:
         results = {}
 
         try:
-            mitre_result = self.mitre.query_group(group_name)
-            results["mitre"] = mitre_result
+            # MITRE alone cannot answer for an emerging actor. ATT&CK only
+            # profiles groups that clear its bar, months to years after the
+            # fact, so hacktivist crews and freshly named groups are simply
+            # absent. OTX and the dark web index are queried alongside it so
+            # "not in ATT&CK" stops being indistinguishable from "unknown".
+            discovery = _run_parallel({
+                "mitre": lambda: self.mitre.query_group(group_name),
+                "otx_search": lambda: self.otx.search_pulses(group_name),
+                "ahmia": lambda: self.ahmia.search(group_name),
+            }, timeout=GROUP_DISCOVERY_TIMEOUT)
+            results.update(discovery)
+            mitre_result = results.get("mitre", {})
 
             chainable = self._chainable_tooling(mitre_result)
+
+            # A group absent from ATT&CK can still have tooling named in
+            # community reporting, so fold those in when MITRE gave nothing.
+            otx_families = results.get("otx_search", {})
+            if isinstance(otx_families, dict):
+                for family in otx_families.get("malware_families", [])[:3]:
+                    if family and family.lower() not in {c.lower() for c in chainable}:
+                        chainable.append(family)
+
+            # Hacktivist read, parsed off the pulse text. ATT&CK does not profile
+            # these crews, they are on Telegram rather than onion sites, and they
+            # rarely have malware, so this is the only thing the pivot returns for
+            # them beyond a bare count.
+            otx_search = results.get("otx_search", {})
+            results["hacktivist"] = hacktivist.assess(
+                group_name,
+                otx_search.get("pulses", []) if isinstance(otx_search, dict) else [],
+            )
+
+            chainable = chainable[:MAX_TOOLING_LOOKUPS]
             if chainable:
                 logger.info(f"Querying MalwareBazaar for group tooling: {chainable}")
                 tasks = {

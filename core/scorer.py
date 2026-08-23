@@ -6,6 +6,7 @@
 import joblib
 import numpy as np
 import logging
+from core import hacktivist
 from core.features import extract_features
 from config import MODEL_DIR
 
@@ -37,7 +38,10 @@ class ConfidenceScorer:
     to the correct scoring method based on indicator type.
     """
  
-    def __init__(self):
+    def __init__(self, org_profile: dict | None = None):
+        # Only used to score hacktivist targeting overlap. Passed in rather than
+        # loaded here so core.agent stays the single place the profile is read.
+        self.org_profile = org_profile
         try:
             self.gb_model = joblib.load(f"{MODEL_DIR}/gradient_boosting.joblib")
             self.iso_forest = joblib.load(f"{MODEL_DIR}/isolation_forest.joblib")
@@ -81,6 +85,105 @@ class ConfidenceScorer:
             "features_used": features,
         }
  
+    # Relevant, deduplicated pulses earning full marks when ATT&CK has nothing.
+    # Measured on filtered counts: NoName057 27, Handala 25, KillNet 12,
+    # CyberVolk 11. Modest on purpose — a genuinely new actor may have a handful
+    # on day one, and the point is to register it exists at all.
+    COMMUNITY_PULSE_FULL_MARKS = 15
+
+    def _score_group_from_community(self, pivot_result: dict, results: dict) -> dict:
+        """
+        Scores a threat group that MITRE ATT&CK does not profile, from OTX pulse
+        volume, distinct authors, and dark web mentions.
+
+        Caps below the ATT&CK-backed range on purpose. Community reporting
+        establishes that an actor is real and active; it does not carry the
+        same evidentiary weight as a curated ATT&CK profile.
+
+        Targeting overlap is deliberately not scored here. Measured against
+        KillNet, a profile the crew names scored 0.75 and one it does not scored
+        0.7025 — both HIGH, because the 0.75 cap swallows the term. It is routed
+        through core.relevance instead, which is what relevance_level is for.
+        """
+        otx = results.get("otx_search", {})
+        ahmia = results.get("ahmia", {})
+        assessment = results.get("hacktivist", {}) or {}
+
+        pulse_count = otx.get("pulse_count", 0) if isinstance(otx, dict) else 0
+        authors = otx.get("distinct_authors", 0) if isinstance(otx, dict) else 0
+        onion_hits = len(ahmia.get("results", []) or []) if isinstance(ahmia, dict) else 0
+        is_hacktivist = bool(assessment.get("is_hacktivist"))
+        otx_failed = isinstance(otx, dict) and "error" in otx
+
+        # What the branch below can actually score from. The hacktivist branch
+        # ignores onion hits, so they are not usable evidence there.
+        scoreable = bool(pulse_count) or (bool(onion_hits) and not is_hacktivist)
+
+        # A failed lookup is not an empty result, and neither is a clean bill.
+        if otx_failed or not scoreable:
+            reason = (
+                "OTX pulse search failed, so community reporting could not be checked"
+                if otx_failed else
+                "No match in MITRE ATT&CK, OTX community reporting, or dark web indexes"
+            )
+            return {
+                "confidence_score": 0.0,
+                "is_anomaly": False,
+                "risk_level": "UNKNOWN",
+                "is_hacktivist": is_hacktivist,
+                "note": (
+                    f"{reason}. Either the name is wrong, the source was "
+                    "unavailable, or the actor is too new to have been written "
+                    "up. This is an absence of data, not a clean bill."
+                ),
+            }
+
+        # Volume says an actor is discussed; independent authors say it is not
+        # one person's post amplified.
+        volume = min(pulse_count / self.COMMUNITY_PULSE_FULL_MARKS, 1.0)
+        corroboration = min(authors / 5, 1.0)
+
+        if is_hacktivist:
+            # These crews coordinate on Telegram, so onion hits are structurally
+            # near zero and carrying that weight would only suppress the score.
+            # It goes to corroboration instead.
+            score = (volume * 0.55) + (corroboration * 0.45)
+            basis = self._hacktivist_note(assessment, pulse_count, authors)
+        else:
+            underground = min(onion_hits / 5, 1.0)
+            score = (volume * 0.45) + (corroboration * 0.35) + (underground * 0.20)
+            basis = (
+                f"{pulse_count} OTX pulses from {authors} authors, "
+                f"{onion_hits} dark web mentions."
+            )
+
+        score = round(min(score, 0.75), 4)
+
+        return {
+            "confidence_score": score,
+            "is_anomaly": False,
+            "risk_level": self._risk_level(score, thresholds=(0.5, 0.25)),
+            "pulse_count": pulse_count,
+            "distinct_authors": authors,
+            "onion_mentions": onion_hits,
+            "is_hacktivist": is_hacktivist,
+            "note": (
+                f"Not in MITRE ATT&CK, scored from community reporting: {basis} "
+                "Capped at 0.75 since community reporting is weaker evidence "
+                "than a curated ATT&CK profile."
+            ),
+        }
+
+    def _hacktivist_note(self, assessment: dict, pulse_count: int, authors: int) -> str:
+        """One line on what the hacktivist read was scored from."""
+        parts = [f"{pulse_count} OTX pulses from {authors} authors"]
+        if assessment.get("alignments"):
+            parts.append(f"assessed {', '.join(assessment['alignments'][:2])}")
+        if assessment.get("activities"):
+            parts.append(f"activity {', '.join(assessment['activities'][:3])}")
+        parts.append("dark web weight reassigned, these crews are on Telegram")
+        return "; ".join(parts) + "."
+
     def score_threat_group(self, pivot_result: dict) -> dict:
         """
         Scores a threat group pivot based on MITRE ATT&CK coverage.
@@ -91,12 +194,11 @@ class ConfidenceScorer:
         mitre = results.get("mitre", {})
  
         if not mitre.get("found"):
-            return {
-                "confidence_score": 0.0,
-                "is_anomaly": False,
-                "risk_level": "UNKNOWN",
-                "note": "Group not found in MITRE ATT&CK — query may need an alternate alias."
-            }
+            # ATT&CK absence is not evidence of absence. Hacktivist crews and
+            # newly named actors are routinely missing from it, so fall back to
+            # community reporting rather than returning a flat zero that reads
+            # as "harmless".
+            return self._score_group_from_community(pivot_result, results)
  
         # True totals from the connector. The len() fallback is for older
         # cached results only, and undercounts.
