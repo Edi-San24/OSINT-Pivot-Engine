@@ -102,6 +102,10 @@ def build_metrics_table(result: dict, verbose: bool = False) -> Table:
 
     if decided_by == "no_data":
         label = "[No data collected]"
+    elif result.get("summary_failed"):
+        # The scores are real but no assessment was written. Without this the
+        # level reads as a considered verdict when nothing considered it.
+        label = "[Score-derived; summary unavailable]"
     elif decided_by == "agent":
         label = "[Agent's Verdict]"
     elif agent_level and agent_level != risk_level:

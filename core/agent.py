@@ -67,6 +67,8 @@ class AgentState(TypedDict):
     insufficient_data: bool
     # Per-type thresholds from the scorer, reapplied by core.risk.
     risk_thresholds: list
+    # The LLM produced no summary. The scores stand; the assessment is missing.
+    summary_failed: bool
  
  
 def is_ipv4(value: str) -> bool:
@@ -307,22 +309,29 @@ def extract_findings(result: dict) -> list[str]:
 
     # OTX community reporting on a name. For groups ATT&CK does not profile,
     # this is the only evidence the actor exists at all.
-    otx_search = results.get("otx_search", {})
-    if isinstance(otx_search, dict) and otx_search.get("found"):
-        findings.append(
-            f"{indicator}: named in {otx_search.get('pulse_count', 0)} OTX community "
-            f"pulses from {otx_search.get('distinct_authors', 0)} independent authors."
-        )
-        recent = [p.get("name", "") for p in otx_search.get("pulses", [])[:3] if p.get("name")]
-        if recent:
-            findings.append(f"{indicator}: community reporting — {'; '.join(recent)}.")
-        if otx_search.get("malware_families"):
+    #
+    # Only threat_group pivots query it, so the key has to be present rather than
+    # merely defaulting to {}. An absent lookup previously fell through to the
+    # negative branch — {} is a dict with no "error" — and every IP, domain and
+    # hash pivot asserted there was no community reporting on a name that was
+    # never searched for.
+    otx_search = results.get("otx_search")
+    if isinstance(otx_search, dict):
+        if otx_search.get("found"):
             findings.append(
-                f"{indicator}: tooling named in reporting — "
-                f"{', '.join(otx_search['malware_families'][:6])}."
+                f"{indicator}: named in {otx_search.get('pulse_count', 0)} OTX community "
+                f"pulses from {otx_search.get('distinct_authors', 0)} independent authors."
             )
-    elif isinstance(otx_search, dict) and "error" not in otx_search:
-        findings.append(f"{indicator}: no OTX community reporting found for this name.")
+            recent = [p.get("name", "") for p in otx_search.get("pulses", [])[:3] if p.get("name")]
+            if recent:
+                findings.append(f"{indicator}: community reporting — {'; '.join(recent)}.")
+            if otx_search.get("malware_families"):
+                findings.append(
+                    f"{indicator}: tooling named in reporting — "
+                    f"{', '.join(otx_search['malware_families'][:6])}."
+                )
+        elif "error" not in otx_search:
+            findings.append(f"{indicator}: no OTX community reporting found for this name.")
 
     # Hacktivist read. Alignment and stated targeting are the whole picture for
     # these crews — there is usually no malware to report.
@@ -631,20 +640,46 @@ def summarize(state: AgentState) -> AgentState:
         f"Full results:\n{results_str}"
     )
  
-    response = llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_message)
-    ])
- 
-    content = response.content
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                content = block.get("text", "")
-                break
- 
-    state["summary"] = content if isinstance(content, str) else ""
- 
+    # A failure here used to surface as an empty summary on an otherwise normal
+    # looking result: no error, findings present, and a score-derived risk level
+    # that read as a confident verdict. The investigation is still usable — the
+    # scoring layers ran — but the gap has to be visible rather than blank.
+    content = ""
+    try:
+        response = llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_message)
+        ])
+        content = response.content
+        if isinstance(content, list):
+            # Anthropic returns content blocks; pull the first text one.
+            content = next(
+                (b.get("text", "") for b in content
+                 if isinstance(b, dict) and b.get("type") == "text"),
+                "",
+            )
+    except Exception as e:
+        logger.error(f"Summary generation failed: {str(e)[:150]}")
+
+    summary = content.strip() if isinstance(content, str) else ""
+    state["summary_failed"] = not summary
+
+    if not summary:
+        logger.error("Summary generation returned nothing.")
+        # Deliberately carries no THREAT LEVEL line. The scores are still valid,
+        # so resolution should fall back to them rather than being forced to
+        # UNKNOWN — but the reader must not mistake this for an assessment.
+        summary = (
+            "SUMMARY UNAVAILABLE — the analyst summary could not be generated for "
+            "this investigation, so no written assessment was produced.\n\n"
+            f"The pivot chain itself completed: {state['pivot_count']} pivot(s) and "
+            f"{len(state['findings'])} finding(s) were collected, and the risk level "
+            "shown is derived from the score alone. Read the findings directly, and "
+            "re-run to obtain a written assessment."
+        )
+
+    state["summary"] = summary
+
     # NER — scan summary text for threat actor mentions
     summary_pseudo_result = {"results": {"ahmia": {"results": [{"snippet": state["summary"]}]}}}
     actors_found = ner_extractor.extract_threat_actors(summary_pseudo_result, state["visited"])
@@ -700,6 +735,7 @@ def run_agent(seed: str, deep: bool = False) -> dict:
         # that far has collected nothing by definition.
         "insufficient_data": True,
         "risk_thresholds": list(DEFAULT_THRESHOLDS),
+        "summary_failed": False,
     }
  
     graph = StateGraph(AgentState)
@@ -733,6 +769,7 @@ def run_agent(seed: str, deep: bool = False) -> dict:
         "context_note": final_state["context_note"],
         "insufficient_data": final_state["insufficient_data"],
         "risk_thresholds": final_state["risk_thresholds"],
+        "summary_failed": final_state["summary_failed"],
         "full_results": final_state["pivot_results"],
         "visited": final_state["visited"],
         "indicator": seed,
