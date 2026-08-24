@@ -110,7 +110,15 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             record_type = record.get("record_type", "")
             if record_type == "a" and ip and is_ipv4(ip) and ip not in visited:
                 new_indicators.append(ip)
- 
+
+        # Where the domain points now. Chained alongside passive DNS, not
+        # instead of it: a domain with no history still resolves, and reading
+        # only passive DNS stopped salviadivinorumseeds.net at one pivot while
+        # its two live addresses sat unexamined in the same result.
+        for ip in (results.get("dns", {}) or {}).get("a", []) or []:
+            if is_ipv4(ip) and ip not in visited:
+                new_indicators.append(ip)
+
         censys = results.get("censys", {})
         for cert in censys.get("certificates", []):
             names = cert.get("names", "")
