@@ -188,3 +188,234 @@ class STIXExporter:
 
         logger.info(f"STIX bundle written to {output_path}")
         return output_path
+
+
+# --- OTX pulse export ------------------------------------------------------
+#
+# A second export format. An investigation result holds every indicator the
+# pivot chain touched, including passive DNS neighbours of the seed. Handing
+# that file to OTX's extractor produced 41 indicators of which 39 were wrong,
+# 24 of them naming unrelated businesses sharing a server with the victim. A
+# pulse is a curated claim, so only what the agent investigated goes in, and
+# everything dropped is recorded with a reason.
+
+# OTX indicator type names, keyed by the engine's own types.
+
+OTX_TYPES = {
+    "ipv4": "IPv4",
+    "domain": "domain",
+    "hostname": "hostname",
+    "md5": "FileHash-MD5",
+    "sha1": "FileHash-SHA1",
+    "sha256": "FileHash-SHA256",
+    "email": "email",
+}
+
+
+def _is_under(name: str, parents: set[str]) -> bool:
+    """Whether name is one of parents, or a subdomain of one."""
+    name = name.lower().rstrip(".")
+    return any(name == p or name.endswith("." + p) for p in parents)
+
+
+def _co_hosted_tenants(pivot: dict, investigated_domains: set[str]) -> list[str]:
+    """
+    Domains on this IP that belong to somebody else.
+
+    A host serving names outside the investigated domains is shared, so
+    publishing its address asks other defenders to block bystanders. This is
+    the check that separates a tenant's own box from a multi-tenant one, and it
+    is deliberately strict: one foreign name is enough.
+    """
+    records = (pivot.get("results", {}).get("passivedns") or {}).get("records") or []
+    tenants = []
+    for record in records:
+        value = (record.get("domain") or record.get("ip") or "").strip().lower()
+        if value and not value.replace(".", "").isdigit():
+            if not _is_under(value, investigated_domains):
+                tenants.append(value)
+    return sorted(set(tenants))
+
+
+def _engine_artifacts(investigation: dict) -> set[str]:
+    """
+    Names the engine invented or read off the hosting provider.
+
+    The wildcard probe is a random label our own code generated to test the
+    zone; it never existed. Nameservers and PTR names identify the provider,
+    not the campaign.
+    """
+    artifacts = set()
+    for pivot in investigation.get("full_results", []):
+        live = pivot.get("results", {}).get("dns") or {}
+        probe = (live.get("wildcard") or {}).get("probe")
+        if probe:
+            artifacts.add(probe.lower())
+        for name in (live.get("nameservers") or []) + (live.get("ptr") or []):
+            artifacts.add(name.lower().rstrip("."))
+        shodan = pivot.get("results", {}).get("shodan") or {}
+        for name in shodan.get("hostnames") or []:
+            artifacts.add(name.lower().rstrip("."))
+    return artifacts
+
+
+def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict]]:
+    """
+    Picks the indicators worth publishing, and records what was dropped.
+
+    Only indicators the agent actually investigated are eligible — a passive
+    DNS neighbour was never assessed and has no place in a pulse.
+    """
+    investigated: list[tuple[str, dict]] = []
+    for investigation in investigations:
+        for name in investigation.get("visited", []):
+            investigated.append((name.strip().lower(), investigation))
+
+    domains = {
+        n for n, _ in investigated
+        if not n.replace(".", "").isdigit() and "." in n
+    }
+
+    included, excluded = [], []
+    seen = set()
+
+    for name, investigation in investigated:
+        if name in seen:
+            continue
+        seen.add(name)
+
+        if name in _engine_artifacts(investigation):
+            excluded.append({"indicator": name,
+                             "reason": "engine artifact or hosting provider infrastructure"})
+            continue
+
+        pivot = next(
+            (p for p in investigation.get("full_results", [])
+             if (p.get("indicator") or "").lower() == name),
+            {},
+        )
+        itype = pivot.get("type", "")
+
+        if itype == "ipv4":
+            tenants = _co_hosted_tenants(pivot, domains)
+            if tenants:
+                excluded.append({
+                    "indicator": name,
+                    "reason": (
+                        f"shared hosting — {len(tenants)} unrelated domain(s) on this "
+                        f"address, blocking it would hit bystanders"
+                    ),
+                    "co_hosted": tenants[:10],
+                })
+                continue
+
+        # A name sitting under another published domain is a hostname to OTX.
+        others = domains - {name}
+        resolved = "hostname" if (itype == "domain" and _is_under(name, others)) else itype
+        included.append({
+            "indicator": name,
+            "type": OTX_TYPES.get(resolved, resolved),
+            "engine_risk_level": investigation.get("risk_level", "unknown"),
+        })
+
+    return included, excluded
+
+
+def build_pulse(investigations: list[dict], title: str, description: str,
+          tags: list[str] = None, attack_ids: list[str] = None) -> dict:
+    """
+    Assembles the pulse payload plus an audit of what was left out.
+
+    The payload matches what OTXConnector.publish_pulse posts, so the same
+    object can be uploaded or published without reshaping.
+    """
+    included, excluded = select_indicators(investigations)
+
+    return {
+        "name": title,
+        "description": description,
+        "public": 1,
+        "TLP": "white",
+        "tags": tags or [],
+        "attack_ids": attack_ids or [],
+        "indicators": [
+            {"indicator": i["indicator"], "type": i["type"]} for i in included
+        ],
+        "malware_families": [],
+        "adversary": "",
+        "targeted_countries": [],
+        # Not part of the OTX payload. Kept so every dropped indicator has a
+        # stated reason rather than vanishing silently.
+        "_excluded": excluded,
+        "_included_detail": included,
+        "_source_investigations": [
+            {
+                "seed": inv.get("indicator"),
+                "risk_level": inv.get("risk_level"),
+                "pivot_count": inv.get("pivot_count"),
+                "indicators_investigated": inv.get("visited", []),
+            }
+            for inv in investigations
+        ],
+    }
+
+
+def write_pulse(pulse: dict, output_path: str) -> tuple[str, str]:
+    """
+    Writes the pulse twice: a clean payload to upload, and a full audit copy.
+
+    Split because the audit sections name the co-hosted domains that were
+    excluded, and OTX's file extractor would scrape them straight back out —
+    reintroducing the exact indicators the selection just removed.
+    """
+    clean = {k: v for k, v in pulse.items() if not k.startswith("_")}
+    with open(output_path, "w") as f:
+        json.dump(clean, f, indent=2)
+
+    audit_path = output_path.replace(".json", "") + ".audit.json"
+    with open(audit_path, "w") as f:
+        json.dump(pulse, f, indent=2)
+
+    return output_path, audit_path
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Build an OTX pulse from saved investigation JSON files.",
+    )
+    parser.add_argument("investigations", nargs="+", metavar="FILE")
+    parser.add_argument("--title", "-t", required=True)
+    parser.add_argument("--description", "-d", required=True,
+                        help="Text, or @path to read it from a file.")
+    parser.add_argument("--tags", default="")
+    parser.add_argument("--attack-ids", default="")
+    parser.add_argument("--output", "-o", default="pulse.json")
+    args = parser.parse_args()
+
+    description = args.description
+    if description.startswith("@"):
+        with open(description[1:]) as fh:
+            description = fh.read().strip()
+
+    loaded = []
+    for path in args.investigations:
+        with open(path) as fh:
+            loaded.append(json.load(fh))
+
+    built = build_pulse(
+        loaded,
+        title=args.title,
+        description=description,
+        tags=[t.strip() for t in args.tags.split(",") if t.strip()],
+        attack_ids=[a.strip() for a in args.attack_ids.split(",") if a.strip()],
+    )
+    clean_path, audit_path = write_pulse(built, args.output)
+
+    print(f"upload this : {clean_path}")
+    for i in built["_included_detail"]:
+        print(f"    {i['type']:<10} {i['indicator']}  (engine: {i['engine_risk_level']})")
+    print(f"\naudit trail : {audit_path}")
+    for e in built["_excluded"]:
+        print(f"    excluded {e['indicator']} — {e['reason']}")
