@@ -16,6 +16,7 @@ from connectors.shodan import ShodanConnector
 from connectors.censys import CensysConnector
 from connectors.whois import WHOISConnector
 from connectors.rdap import RDAPConnector
+from connectors.dns import DNSConnector
 from connectors.passivedns import PassiveDNSConnector
 from connectors.onion import OnionConnector
 from connectors.mitre import MITREConnector
@@ -118,6 +119,7 @@ class PivotExecutor:
         self.shodan = ShodanConnector()
         self.whois = WHOISConnector()
         self.rdap = RDAPConnector()
+        self.dns = DNSConnector()
         self.passivedns = PassiveDNSConnector()
         self.censys = CensysConnector()
         self.ahmia = OnionConnector()
@@ -153,6 +155,7 @@ class PivotExecutor:
             "shodan": lambda: self.shodan.query_ip(ip),
             "passivedns": lambda: self.passivedns.query_ip(ip),
             "censys": lambda: self.censys.query_ip(ip),
+            "dns": lambda: self.dns.query_ip(ip),
             "ahmia": lambda: self.ahmia.search(ip),
             "urlhaus": lambda: self.urlhaus.query_host(ip),
             "otx": lambda: self.otx.query_indicator(ip, "IPv4"),
@@ -171,6 +174,9 @@ class PivotExecutor:
         tasks = {
             "virustotal": lambda: self.vt.query_domain(domain),
             "whois": lambda: self._registration(domain),
+            # Current state. passivedns covers history; neither substitutes
+            # for the other, and only a live query sees a wildcard zone.
+            "dns": lambda: self.dns.query_domain(domain),
             "passivedns": lambda: self.passivedns.query_domain(domain),
             "censys": lambda: self.censys.query_domain_certificates(domain),
             "ahmia": lambda: self.ahmia.search(domain),

@@ -44,3 +44,4 @@ PyYAML==6.0.3
 
 # Terminal UI (tui.py)
 textual==8.2.8
+dnspython==2.8.0

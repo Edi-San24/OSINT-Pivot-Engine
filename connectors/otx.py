@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 from config import OTX_API_KEY
  
 BASE_URL = "https://otx.alienvault.com/api/v1"
+
+# Sentinel so "lookup failed, cached None" stays distinguishable from
+# "not looked up yet", which would otherwise retry on every call.
+_UNSET = object()
  
  
 class OTXConnector:
@@ -26,8 +30,66 @@ class OTXConnector:
             "X-OTX-API-KEY": OTX_API_KEY,
             "Content-Type": "application/json"
         }
+        self._username = _UNSET
         logger.info("OTX connector initialized.")
  
+    def _self_username(self) -> str | None:
+        """
+        The OTX account behind the API key, cached for the process.
+
+        Needed so our own pulses are not counted as corroboration. Fetched
+        rather than configured, so it is always right for whichever key is in
+        use. Returns None if the lookup fails, and the caller reports that no
+        filtering happened rather than filtering silently.
+        """
+        if self._username is not _UNSET:
+            return self._username
+
+        try:
+            response = requests.get(
+                f"{BASE_URL}/user/me", headers=self.headers, timeout=15
+            )
+            response.raise_for_status()
+            self._username = response.json().get("username") or None
+        except Exception as e:
+            logger.warning(f"Could not resolve own OTX username: {str(e)[:80]}")
+            self._username = None
+
+        return self._username
+
+    @staticmethod
+    def _pulse_author(pulse: dict) -> str:
+        """
+        Author of a pulse, across both response shapes OTX uses.
+
+        /indicators/.../general nests it as author.username while /search/pulses
+        returns author_name. Only the latter was read, so every pulse from an
+        indicator lookup reported its author as "unknown".
+        """
+        author = pulse.get("author")
+        if isinstance(author, dict):
+            return author.get("username") or "unknown"
+        if pulse.get("author_name"):
+            return pulse["author_name"]
+        return author if isinstance(author, str) and author else "unknown"
+
+    def _split_own_pulses(self, pulses: list) -> tuple[list, list]:
+        """
+        Separates pulses we published from everyone else's.
+
+        Our own reporting is not independent evidence. Counting it inflates
+        corroboration with our own assumptions and, worse, feeds published tags
+        back in as findings on the next investigation.
+        """
+        mine = self._self_username()
+        if not mine:
+            return list(pulses), []
+
+        external, own = [], []
+        for pulse in pulses:
+            (own if self._pulse_author(pulse) == mine else external).append(pulse)
+        return external, own
+
     def query_indicator(self, indicator: str, indicator_type: str) -> dict:
         """
         Queries OTX for existing pulses related to an indicator.
@@ -54,17 +116,25 @@ class OTXConnector:
             data = response.json()
  
             pulse_info = data.get("pulse_info", {})
-            pulses = pulse_info.get("pulses", [])[:5]
+            external, own = self._split_own_pulses(pulse_info.get("pulses", []))
+            pulses = external[:5]
  
             return {
                 "indicator": indicator,
                 "type": indicator_type,
                 "source": "otx",
-                "pulse_count": pulse_info.get("count", 0),
+                # Other researchers' pulses only. Our own are listed
+                # separately so they stay visible without counting as
+                # corroboration.
+                "pulse_count": len(external),
+                "pulse_count_including_own": pulse_info.get("count", 0),
+                "own_pulse_count": len(own),
+                "own_pulses": [p.get("name", "unknown") for p in own],
+                "self_filter_applied": self._self_username() is not None,
                 "pulses": [
                     {
                         "name": p.get("name", "unknown"),
-                        "author": p.get("author_name", "unknown"),
+                        "author": self._pulse_author(p),
                         "created": p.get("created", "unknown"),
                         "tags": p.get("tags", []),
                         "malware_families": p.get("malware_families", []),
@@ -130,12 +200,15 @@ class OTXConnector:
             response.raise_for_status()
             data = response.json()
             returned = data.get("results", []) or []
-            pulses = self._relevant_pulses(returned, query)
+            pulses, own = self._split_own_pulses(
+                self._relevant_pulses(returned, query)
+            )
 
             authors, malware, adversaries, tags = set(), set(), set(), set()
             for p in pulses:
-                if p.get("author_name"):
-                    authors.add(p["author_name"])
+                author = self._pulse_author(p)
+                if author != "unknown":
+                    authors.add(author)
                 malware.update(p.get("malware_families", []) or [])
                 if p.get("adversary"):
                     adversaries.add(p["adversary"])
@@ -151,6 +224,8 @@ class OTXConnector:
                 "pulse_count": len(pulses),
                 "pulse_count_reported": data.get("count", len(returned)),
                 "pulses_screened": len(returned),
+                "own_pulse_count": len(own),
+                "self_filter_applied": self._self_username() is not None,
                 "distinct_authors": len(authors),
                 "malware_families": sorted(malware)[:10],
                 "adversaries": sorted(adversaries)[:5],

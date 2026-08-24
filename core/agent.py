@@ -22,7 +22,7 @@ from core.graph_scorer import GraphScorer
 from core.temporal_scorer import TemporalScorer
 from core.ner_extractor import NERExtractor
 from core.detector import detect_type
-from core.risk import NON_INFRASTRUCTURE_TYPES, DEFAULT_THRESHOLDS
+from core.risk import NON_INFRASTRUCTURE_TYPES, DEFAULT_THRESHOLDS, resolve_risk_level
 from core import disagreement
 from core.relevance import assess_relevance, load_profile
  
@@ -202,6 +202,31 @@ def extract_findings(result: dict) -> list[str]:
     if vt.get("malware_family"):
         findings.append(f"{indicator}: VirusTotal family label — {vt['malware_family']}.")
 
+    # Live DNS — current state, and whether the zone answers for any label.
+    live = results.get("dns", {})
+    if isinstance(live, dict) and "error" not in live:
+        if live.get("a") or live.get("aaaa"):
+            addresses = ", ".join((live.get("a") or []) + (live.get("aaaa") or []))
+            findings.append(f"{indicator}: currently resolves to {addresses}.")
+        elif live.get("resolves") is False:
+            findings.append(f"{indicator}: does not currently resolve.")
+        if live.get("cname"):
+            findings.append(f"{indicator}: CNAME to {', '.join(live['cname'])}.")
+
+        # Reported as an observation, not a recommendation. A wildcard is cPanel's
+        # default on shared hosting and also the signature of generated attacker
+        # hostnames, so what it means depends on context the connector lacks.
+        wildcard = live.get("wildcard") or {}
+        if wildcard.get("is_wildcard"):
+            findings.append(
+                f"{indicator}: zone {wildcard.get('zone_apex')} resolves any label "
+                f"(wildcard confirmed via probe {wildcard.get('probe')}), so arbitrary "
+                f"hostnames under it resolve and a single hostname carries little weight "
+                f"by itself. Common on both shared hosting and generated infrastructure."
+            )
+        if live.get("ptr"):
+            findings.append(f"{indicator}: reverse DNS — {', '.join(live['ptr'])}.")
+
     # Shodan and Censys — exposed services and hosting
     shodan = results.get("shodan", {})
     censys = results.get("censys", {})
@@ -229,6 +254,17 @@ def extract_findings(result: dict) -> list[str]:
         findings.append(
             f"{indicator}: URLhaus lists {urlhaus.get('url_count', 0)} malicious URLs "
             f"({online} currently online)."
+        )
+
+    # Our own pulses are excluded from the count by the connector. Reported
+    # separately so they stay visible without reading as independent
+    # corroboration of our own earlier conclusions.
+    otx = results.get("otx", {})
+    if isinstance(otx, dict) and otx.get("own_pulse_count"):
+        findings.append(
+            f"{indicator}: {otx['own_pulse_count']} of the OTX pulses naming this "
+            f"indicator are your own ({', '.join(otx.get('own_pulses') or [])}) and are "
+            f"excluded from the corroboration count."
         )
 
     # OTX — community pulse reporting
@@ -774,6 +810,11 @@ def run_agent(seed: str, deep: bool = False) -> dict:
         "visited": final_state["visited"],
         "indicator": seed,
     }
+
+    # Resolved once here so every consumer agrees, and so a saved investigation
+    # carries its own verdict. main.py computed this for display only, which left
+    # the exported JSON without the one field a reader looks for first.
+    result["risk_level"] = resolve_risk_level(result)
 
     # Logged here rather than in the front ends, so the CLI, TUI and MCP server
     # all record exactly one row per investigation.
