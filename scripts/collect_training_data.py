@@ -1,16 +1,18 @@
 # scripts/collect_training_data.py
 # Collects real labeled IOC data for ML model training.
-# Pulls confirmed malicious IPs from ThreatFox, Feodo Tracker, and URLhaus,
-# and diverse benign IPs including Tor exit nodes and shared hosting,
-# extracts features, and saves to data/training_data.csv
+# Pulls confirmed malicious IOCs from ThreatFox, Feodo Tracker, and URLhaus,
+# benign IPs from Tor exits and shared hosting and benign domains from the
+# Tranco rank window, extracts features, and saves to data/.
 
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
+import io
 import socket
 import threading
+import zipfile
 
 import requests
 import pandas as pd
@@ -49,6 +51,17 @@ OUTPUT_PATH = os.path.join(DATA_DIR, "training_data.csv")
 # 16s is 3.75/min, just under the limit. 365 IPs takes about 100 minutes. Raise
 # this only if you are on a paid VirusTotal tier.
 RATE_LIMIT = 16.0
+
+# The free tier also caps the DAY at 500 lookups, which pacing cannot help with.
+# Budget a run against what is left of that, not just against the minute rate:
+# one collection of 199 domains plus a handful of live investigations crosses it,
+# and every lookup past the cap 429s and is dropped by REQUIRE_VIRUSTOTAL.
+VT_DAILY_QUOTA = 500
+
+# Consecutive 429s mean the daily cap, not congestion. Pacing will not clear it,
+# so the run stops and keeps what it has rather than sleeping through the
+# remainder of the list collecting nothing.
+MAX_CONSECUTIVE_QUOTA_ERRORS = 5
 
 # Rows whose VirusTotal lookup failed are dropped rather than written with
 # zeros. Pacing alone is not enough: a transient 429 or outage would otherwise
@@ -325,6 +338,7 @@ def collect_features(ips: list, label: int) -> list:
                 continue
 
             features = extract_features({"indicator": ip, "type": "ipv4", "results": results})
+            features["indicator"] = ip
             features["label"] = label
             samples.append(features)
         except Exception as e:
@@ -348,16 +362,22 @@ def collect_features(ips: list, label: int) -> list:
 DOMAIN_OUTPUT_PATH = os.path.join(DATA_DIR, "training_data_domains.csv")
 
 
-def fetch_malicious_domains(limit: int = MALICIOUS_SAMPLE_SIZE) -> list:
+def _fetch_threat_feed_domains() -> list:
     """
-    Recent malicious domains from ThreatFox and URLhaus.
+    Every domain ThreatFox and URLhaus currently list, uncapped.
 
-    Both are free and same-day. URLhaus entries are URLs, so only the host is
-    kept — the feature set describes a domain, not a path.
+    Kept separate from the sampling below because the full set is also the
+    exclusion list for benign candidates. Sampling 200 malicious domains and
+    excluding only those 200 would leave the rest of the feed free to turn up
+    in the benign class.
+
+    Raises when every source fails. Neither feed is ever legitimately empty, so
+    a zero-length result means the lookup did not happen — and an exclusion list
+    that quietly became empty lets listed malware domains into the benign class
+    while the run reports success.
     """
-    from urllib.parse import urlparse
-
     domains: list[str] = []
+    reached = 0
 
     try:
         headers = {"Auth-Key": THREATFOX_API_KEY} if THREATFOX_API_KEY else {}
@@ -366,7 +386,17 @@ def fetch_malicious_domains(limit: int = MALICIOUS_SAMPLE_SIZE) -> list:
             json={"query": "get_iocs", "days": 7},
             headers=headers, timeout=60,
         )
-        for row in (response.json().get("data") or []):
+        response.raise_for_status()
+
+        # An unauthenticated call answers 200 with query_status "unauthorized"
+        # and no data key, which the parse below would read as zero IOCs.
+        payload = response.json()
+        status = payload.get("query_status")
+        if status != "ok":
+            raise RuntimeError(f"query_status {status!r}")
+
+        reached += 1
+        for row in (payload.get("data") or []):
             if row.get("ioc_type") not in ("domain", "url"):
                 continue
             value = row.get("ioc") or ""
@@ -376,12 +406,14 @@ def fetch_malicious_domains(limit: int = MALICIOUS_SAMPLE_SIZE) -> list:
                 domains.append(host)
         logger.info(f"ThreatFox returned {len(domains)} candidate domains.")
     except Exception as e:
-        logger.warning(f"ThreatFox fetch failed: {str(e)[:100]}")
+        logger.warning(f"ThreatFox fetch failed: {str(e)[:300]}")
 
     try:
         response = requests.get(
             "https://urlhaus.abuse.ch/downloads/text_recent/", timeout=60
         )
+        response.raise_for_status()
+        reached += 1
         added = 0
         for line in response.text.splitlines():
             line = line.strip()
@@ -393,25 +425,133 @@ def fetch_malicious_domains(limit: int = MALICIOUS_SAMPLE_SIZE) -> list:
                 added += 1
         logger.info(f"URLhaus added {added} candidate domains.")
     except Exception as e:
-        logger.warning(f"URLhaus fetch failed: {str(e)[:100]}")
+        logger.warning(f"URLhaus fetch failed: {str(e)[:300]}")
 
+    if not reached:
+        raise RuntimeError(
+            "ThreatFox and URLhaus both unreachable — refusing to treat an "
+            "absent exclusion list as an empty one."
+        )
+    return list(dict.fromkeys(domains))
+
+
+def fetch_malicious_domains(limit: int = MALICIOUS_SAMPLE_SIZE) -> list:
+    """
+    A random sample of recent malicious domains from ThreatFox and URLhaus.
+
+    Both are free and same-day. URLhaus entries are URLs, so only the host is
+    kept — the feature set describes a domain, not a path.
+    """
+    if limit <= 0:
+        return []
+
+    domains = _fetch_threat_feed_domains()
     random.shuffle(domains)
-    unique = list(dict.fromkeys(domains))[:limit]
+    unique = domains[:limit]
     logger.info(f"Collected {len(unique)} unique malicious domains.")
     return unique
 
 
-def fetch_benign_domains(limit: int = BENIGN_SAMPLE_SIZE) -> list:
-    """
-    The clean domain list, used directly rather than resolved to addresses.
-    Never padded by duplication — a smaller real set beats an inflated one.
-    """
-    unique = list(dict.fromkeys(d.lower() for d in CLEAN_DOMAINS))[:limit]
-    logger.info(f"Collected {len(unique)} benign domains.")
-    return unique
+# Benign domains come from the Tranco rank window, not from CLEAN_DOMAINS.
+#
+# A benign class of household names is trivially separable by VirusTotal vote
+# count, so gradient boosting took that shortcut and ignored everything else:
+# harmless_votes importance 0.8992, domain_age_days 0.0000, ROC-AUC 1.0000. The
+# resulting model called a legitimate hosting provider with zero VirusTotal
+# detections malicious at p=1.000. What it had learned was "is this domain
+# famous", which is not "is this domain safe".
+#
+# Past rank 100k the list is ordinary low-profile businesses with the modest
+# vote counts to match, which is the distribution a real unknown domain is drawn
+# from. Ranks 100k-1M also carry near-zero OTX pulses, which should collapse the
+# other popularity proxy in the feature set alongside harmless_votes.
+TRANCO_URL = "https://tranco-list.eu/top-1m.csv.zip"
+TRANCO_CACHE = os.path.join(DATA_DIR, "tranco_top1m.csv")
+TRANCO_MIN_RANK = 100_000
+TRANCO_MAX_RANK = 1_000_000
+
+# Rank drift over a week does not change whether a domain is an ordinary
+# business, and the download is ~10 MB.
+TRANCO_CACHE_MAX_AGE = 7 * 86400
 
 
-def collect_domain_features(domains: list, label: int) -> list:
+def _load_tranco(refresh: bool = False) -> list:
+    """
+    The daily Tranco list as (rank, domain) pairs, cached under DATA_DIR.
+
+    Rank is parsed from the row rather than inferred from position, so a
+    reordered or partial list cannot silently shift the sampling window.
+    """
+    cached = os.path.exists(TRANCO_CACHE)
+    stale = cached and (time.time() - os.path.getmtime(TRANCO_CACHE)) > TRANCO_CACHE_MAX_AGE
+
+    if cached and not stale and not refresh:
+        with open(TRANCO_CACHE, encoding="utf-8") as handle:
+            raw = handle.read()
+    else:
+        logger.info("Downloading Tranco top-1M...")
+        response = requests.get(TRANCO_URL, timeout=120)
+        response.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            raw = archive.read(archive.namelist()[0]).decode("utf-8", errors="ignore")
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(TRANCO_CACHE, "w", encoding="utf-8") as handle:
+            handle.write(raw)
+        logger.info(f"Cached Tranco list at {TRANCO_CACHE}.")
+
+    ranked = []
+    for line in raw.splitlines():
+        rank, _, domain = line.partition(",")
+        domain = domain.strip().lower()
+        if domain and rank.strip().isdigit():
+            ranked.append((int(rank), domain))
+    return ranked
+
+
+def fetch_tranco_domains(
+    limit: int = BENIGN_SAMPLE_SIZE,
+    exclude: set | None = None,
+    min_rank: int = TRANCO_MIN_RANK,
+    max_rank: int = TRANCO_MAX_RANK,
+) -> list:
+    """
+    A random sample of ordinary registered domains from the Tranco rank window.
+
+    Sampled across the whole window rather than taken from the top of it, so the
+    class is not quietly biased toward the more popular end.
+    """
+    try:
+        ranked = _load_tranco()
+    except Exception as e:
+        logger.warning(f"Tranco fetch failed: {str(e)[:100]}")
+        return []
+
+    blocked = {d.lower() for d in (exclude or set())}
+    window = [d for rank, d in ranked if min_rank <= rank <= max_rank and d not in blocked]
+    logger.info(f"{len(window)} candidates in Tranco ranks {min_rank}-{max_rank}.")
+
+    random.shuffle(window)
+    return list(dict.fromkeys(window))[:limit]
+
+
+def fetch_benign_domains(limit: int = BENIGN_SAMPLE_SIZE, exclude: set | None = None) -> list:
+    """
+    Benign domains: ordinary businesses from the Tranco rank window.
+
+    There is deliberately no CLEAN_DOMAINS option here. That list is the bug
+    this source exists to fix — every variant trained against it found a
+    shortcut — so the ability to regenerate it is a footgun, not a feature. It
+    survives above only because the IP arm resolves it for hosting addresses.
+    """
+    domains = fetch_tranco_domains(limit, exclude={d.lower() for d in (exclude or set())})
+    if not domains:
+        logger.error("Tranco unavailable — collecting no benign domains.")
+    else:
+        logger.info(f"Collected {len(domains)} benign domains from Tranco.")
+    return domains
+
+
+def collect_domain_features(domains: list, label: int, checkpoint: str | None = None) -> list:
     """
     Extracts features for each domain and attaches a label.
 
@@ -420,10 +560,15 @@ def collect_domain_features(domains: list, label: int) -> list:
     URLhaus. Shodan and Censys are skipped because they cannot answer for a
     domain, and Ahmia because it launches a headless browser per lookup and
     contributes no feature.
+
+    checkpoint writes rows as they are collected. Without it the whole run lives
+    in memory until the final to_csv, so an interruption an hour in loses every
+    row — which is exactly what a daily quota wall causes.
     """
     executor = PivotExecutor()
     samples = []
     skipped = 0
+    consecutive_quota_errors = 0
 
     for i, domain in enumerate(domains):
         logger.info(f"Processing {i+1}/{len(domains)}: {domain} (label={label})")
@@ -442,14 +587,29 @@ def collect_domain_features(domains: list, label: int) -> list:
             if REQUIRE_VIRUSTOTAL and vt_error:
                 skipped += 1
                 logger.warning(f"  skipped {domain}: VirusTotal {str(vt_error)[:60]}")
+
+                if "429" in str(vt_error):
+                    consecutive_quota_errors += 1
+                    if consecutive_quota_errors >= MAX_CONSECUTIVE_QUOTA_ERRORS:
+                        logger.error(
+                            f"{consecutive_quota_errors} consecutive 429s — daily "
+                            f"VirusTotal quota ({VT_DAILY_QUOTA}) is spent. Stopping "
+                            f"with {len(samples)} row(s); resume tomorrow with the "
+                            "remaining domains."
+                        )
+                        break
                 time.sleep(RATE_LIMIT)
                 continue
 
+            consecutive_quota_errors = 0
             features = extract_features(
                 {"indicator": domain, "type": "domain", "results": results}
             )
+            features["indicator"] = domain
             features["label"] = label
             samples.append(features)
+            if checkpoint:
+                _checkpoint(samples, checkpoint)
         except Exception as e:
             logger.error(f"  failed {domain}: {str(e)[:100]}")
 
@@ -458,9 +618,17 @@ def collect_domain_features(domains: list, label: int) -> list:
     if skipped:
         logger.warning(
             f"Skipped {skipped}/{len(domains)} domains with no VirusTotal data. "
-            "Sustained skips mean rate limiting; raise RATE_LIMIT."
+            "Sustained skips mean the daily quota, which pacing cannot clear."
         )
     return samples
+
+
+def _checkpoint(samples: list, path: str) -> None:
+    """Rewrites the partial rows so an interrupted run keeps what it paid for."""
+    try:
+        pd.DataFrame(samples).fillna(0).to_csv(path, index=False)
+    except Exception as e:
+        logger.warning(f"Checkpoint failed: {str(e)[:100]}")
 
 
 def main():
@@ -475,10 +643,32 @@ def main():
     parser.add_argument("--indicators", choices=("ip", "domain"), default="ip")
     parser.add_argument("--malicious", type=int, default=MALICIOUS_SAMPLE_SIZE)
     parser.add_argument("--benign", type=int, default=BENIGN_SAMPLE_SIZE)
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Sample the benign class and write it for review. Spends no VirusTotal quota.",
+    )
+    parser.add_argument(
+        "--benign-file", help="Collect the benign class from a vetted list instead.",
+    )
+    parser.add_argument(
+        "--output", default=DOMAIN_OUTPUT_PATH,
+        help="Dataset to write. Defaults to the domain set; point it elsewhere "
+             "to build a new one without touching the existing file.",
+    )
+    parser.add_argument(
+        "--reuse-malicious", action="store_true",
+        help="Copy malicious rows from the existing dataset instead of "
+             "re-collecting them. Read-only on the source file.",
+    )
     args = parser.parse_args()
 
     if args.indicators == "domain":
-        return _collect_domains(args.malicious, args.benign)
+        if args.dry_run:
+            return _dry_run_benign(args.benign)
+        return _collect_domains(
+            args.malicious, args.benign,
+            args.benign_file, args.output, args.reuse_malicious,
+        )
 
     logger.info("Starting data collection pipeline...")
 
@@ -505,12 +695,127 @@ def main():
     logger.info(f"Malicious: {len(malicious_samples)} | Benign: {len(benign_samples)}")
 
 
-def _collect_domains(malicious_limit: int, benign_limit: int) -> None:
+# Tranco ranks a domain by traffic, not by safety, so the window does contain
+# real malware hosts that must not be labelled benign.
+#
+# The threshold is deliberately not zero. Dropping every candidate with a single
+# detection would leave malicious_votes at 0 across the entire benign class and
+# make malicious_ratio a perfect separator — the same shortcut as harmless_votes
+# in a new place. One or two vendors disagreeing is ordinary false-positive
+# noise and is exactly what the model needs to see.
+BENIGN_MAX_MALICIOUS_VOTES = 4
+
+
+def _drop_suspect_benign(samples: list) -> list:
+    """Removes benign candidates that several vendors independently flag."""
+    suspect = [s for s in samples if s.get("malicious_votes", 0) >= BENIGN_MAX_MALICIOUS_VOTES]
+    if suspect:
+        names = ", ".join(str(s.get("indicator")) for s in suspect[:10])
+        logger.warning(
+            f"Dropped {len(suspect)} benign candidate(s) with "
+            f">= {BENIGN_MAX_MALICIOUS_VOTES} detections: {names}"
+        )
+    return [s for s in samples if s.get("malicious_votes", 0) < BENIGN_MAX_MALICIOUS_VOTES]
+
+
+# Where --dry-run writes the benign shortlist, and where --benign-file reads a
+# vetted one back. Review is the only thing that catches the candidates no
+# automated filter can: domains that are not malicious but are structurally
+# indistinguishable from attacker infrastructure — young, cheap TLD, no MX. A
+# benign label on one of those teaches the model the exact opposite of the
+# signal it is meant to learn.
+BENIGN_CANDIDATES_PATH = os.path.join(DATA_DIR, "benign_candidates.txt")
+
+
+def _read_candidates(path: str) -> list:
+    """
+    Reads a vetted domain list, ignoring blanks and comments.
+
+    Comments are stripped from the end of a line too, not just from the start —
+    the shortlist carries rank and flag annotations after a #, and leaving those
+    attached turns every lookup into a 404.
+    """
+    domains = []
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            domain = line.split("#")[0].strip().lower()
+            if domain:
+                domains.append(domain)
+    return list(dict.fromkeys(domains))
+
+
+def _dry_run_benign(limit: int) -> None:
+    """
+    Samples the benign class and writes it for review, so the shortlist can be
+    edited before an hour of collection. Hits only the free unmetered feeds —
+    no VirusTotal quota is spent.
+    """
+    try:
+        feed = set(_fetch_threat_feed_domains())
+    except RuntimeError as e:
+        logger.error(f"{e} Re-run when the feeds are reachable.")
+        return
+    logger.info(f"Excluding {len(feed)} domains currently listed by ThreatFox/URLhaus.")
+
+    benign = fetch_benign_domains(limit, exclude=feed)
+    if not benign:
+        logger.error("No benign candidates sampled.")
+        return
+
+    try:
+        ranks = {domain: rank for rank, domain in _load_tranco()}
+    except Exception:
+        ranks = {}
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(BENIGN_CANDIDATES_PATH, "w", encoding="utf-8") as handle:
+        handle.write(
+            "# Benign candidates for review. Delete any line that could plausibly\n"
+            "# be attacker infrastructure, then collect with --benign-file.\n"
+            "# Do NOT filter on age, nameservers or MX — those are features, and\n"
+            "# filtering on them manufactures the separation you are measuring.\n"
+        )
+        for domain in benign:
+            rank = ranks.get(domain)
+            handle.write(f"{domain}{f'  # rank {rank}' if rank else ''}\n")
+
+    logger.info(f"Wrote {len(benign)} benign candidates to {BENIGN_CANDIDATES_PATH}")
+    logger.info(
+        f"Review it, then: --indicators domain --benign-file {BENIGN_CANDIDATES_PATH}"
+    )
+
+
+def _collect_domains(
+    malicious_limit: int,
+    benign_limit: int,
+    benign_file: str | None = None,
+    output_path: str = DOMAIN_OUTPUT_PATH,
+    reuse_malicious: bool = False,
+) -> None:
     """Domain arm of the pipeline, writing to its own dataset."""
     logger.info("Starting domain data collection...")
 
-    malicious = fetch_malicious_domains(malicious_limit)
-    benign = fetch_benign_domains(benign_limit)
+    try:
+        feed = set(_fetch_threat_feed_domains())
+    except RuntimeError as e:
+        logger.error(f"{e} Re-run when the feeds are reachable.")
+        return
+
+    if reuse_malicious:
+        malicious, malicious_samples = [], _reuse_malicious_rows()
+    else:
+        malicious = fetch_malicious_domains(malicious_limit)
+        malicious_samples = []
+
+    if benign_file:
+        benign = [d for d in _read_candidates(benign_file) if d not in feed]
+        logger.info(f"Loaded {len(benign)} vetted benign domains from {benign_file}.")
+    else:
+        benign = fetch_benign_domains(benign_limit, exclude=feed)
+
+    if not benign:
+        logger.error("No benign domains — aborting rather than writing a one-class dataset.")
+        return
 
     total = len(malicious) + len(benign)
     logger.info(
@@ -518,17 +823,45 @@ def _collect_domains(malicious_limit: int, benign_limit: int) -> None:
         f"{total * RATE_LIMIT / 60:.0f} minutes."
     )
 
-    malicious_samples = collect_domain_features(malicious, label=1)
-    benign_samples = collect_domain_features(benign, label=0)
+    if malicious:
+        malicious_samples = collect_domain_features(
+            malicious, label=1, checkpoint=f"{output_path}.malicious.partial"
+        )
+    benign_samples = _drop_suspect_benign(
+        collect_domain_features(benign, label=0, checkpoint=f"{output_path}.benign.partial")
+    )
 
     df = pd.DataFrame(malicious_samples + benign_samples).fillna(0)
-    if os.path.exists(DOMAIN_OUTPUT_PATH):
-        existing = pd.read_csv(DOMAIN_OUTPUT_PATH)
-        df = pd.concat([existing, df], ignore_index=True).drop_duplicates()
 
-    df.to_csv(DOMAIN_OUTPUT_PATH, index=False)
-    logger.info(f"Saved {len(df)} domain samples to {DOMAIN_OUTPUT_PATH}")
+    # Appends only to the file it was told to write. Nothing is ever discarded
+    # from an existing dataset — a benign class collected under a different
+    # definition belongs in a different file, not in place of this one.
+    if os.path.exists(output_path):
+        existing = pd.read_csv(output_path)
+        df = pd.concat([existing, df], ignore_index=True).drop_duplicates()
+        logger.info(f"Appended to existing {os.path.basename(output_path)}.")
+
+    df.to_csv(output_path, index=False)
+    logger.info(f"Saved {len(df)} domain samples to {output_path}")
     logger.info(f"Malicious: {len(malicious_samples)} | Benign: {len(benign_samples)}")
+
+
+def _reuse_malicious_rows(source_path: str = DOMAIN_OUTPUT_PATH) -> list:
+    """
+    Copies already-collected malicious rows out of an existing dataset.
+
+    They cost roughly an hour of VirusTotal quota and nothing about them is
+    wrong — only the benign class is being replaced. Read-only: the source file
+    is never modified.
+    """
+    if not os.path.exists(source_path):
+        logger.warning(f"No dataset at {source_path} to reuse malicious rows from.")
+        return []
+
+    existing = pd.read_csv(source_path)
+    rows = existing[existing["label"] == 1].to_dict("records")
+    logger.info(f"Reusing {len(rows)} malicious row(s) from {os.path.basename(source_path)}.")
+    return rows
 
 
 if __name__ == "__main__":

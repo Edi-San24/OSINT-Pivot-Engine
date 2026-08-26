@@ -26,8 +26,19 @@ ALIAS_FULL_MARKS = 9
 # established, not how dangerous it is — severity comes from the tag signal —
 # so this saturates early on purpose.
 SAMPLE_VOLUME_FULL_MARKS = 50
- 
- 
+
+# The live domain model. v2c is the variant trained without the VirusTotal
+# features — those three columns are one number viewed three ways, and alone
+# they score AUC 0.96, so a model leaning on them cannot say anything
+# VirusTotal has not already said. briansclub.cm is the case: zero VirusTotal
+# detections, called benign at p=0.010 by the VirusTotal-dependent variant and
+# flagged at 0.962 by this one.
+#
+# Change this tag to swap variants; the models keep their own column lists, so
+# nothing else needs touching.
+DOMAIN_MODEL_TAG = "v2c"
+
+
 class ConfidenceScorer:
     """
     Loads trained models and scores pivot results.
@@ -42,15 +53,27 @@ class ConfidenceScorer:
         # Only used to score hacktivist targeting overlap. Passed in rather than
         # loaded here so core.agent stays the single place the profile is read.
         self.org_profile = org_profile
-        try:
-            self.gb_model = joblib.load(f"{MODEL_DIR}/gradient_boosting.joblib")
-            self.iso_forest = joblib.load(f"{MODEL_DIR}/isolation_forest.joblib")
-            logger.info("Confidence scoring models loaded successfully.")
-        except FileNotFoundError:
+        self.gb_model, self.iso_forest = self._load_pair("")
+        if self.gb_model is None:
             logger.error("Models not found. Run core/trainer.py first.")
-            self.gb_model = None
-            self.iso_forest = None
- 
+
+        # Absent on a clone, since domain models are gitignored. Domains then
+        # fall back to the IP model rather than going unscored.
+        self.domain_gb, self.domain_iso = self._load_pair(f"_{DOMAIN_MODEL_TAG}_domain")
+        if self.domain_gb is None:
+            logger.info("No domain model; domain indicators use the IP model.")
+
+    @staticmethod
+    def _load_pair(suffix: str) -> tuple:
+        """Loads a gradient boosting and isolation forest pair, (None, None) if absent."""
+        try:
+            return (
+                joblib.load(f"{MODEL_DIR}/gradient_boosting{suffix}.joblib"),
+                joblib.load(f"{MODEL_DIR}/isolation_forest{suffix}.joblib"),
+            )
+        except FileNotFoundError:
+            return None, None
+
     def _risk_level(self, score: float, thresholds: tuple = (0.7, 0.4)) -> str:
         """Returns HIGH / MEDIUM / LOW based on score and thresholds."""
         high, medium = thresholds
@@ -78,24 +101,38 @@ class ConfidenceScorer:
     def score(self, pivot_result: dict) -> dict:
         """
         ML-based scoring for infrastructure indicators — IP, domain, hash.
-        Uses Gradient Boosting + Isolation Forest trained on ThreatFox data.
+
+        Domains are scored by their own model where one is installed. The IP
+        model reads three features from Shodan and Censys, which are IP services
+        the domain pivot never calls, so on a domain a third of its input is
+        structurally zero.
         """
-        if not self.gb_model or not self.iso_forest:
+        use_domain = pivot_result.get("type") == "domain" and self.domain_gb is not None
+        gb = self.domain_gb if use_domain else self.gb_model
+        iso = self.domain_iso if use_domain else self.iso_forest
+
+        if not gb or not iso:
             return {"error": "Models not loaded. Run trainer first."}
- 
+
         features = extract_features(pivot_result)
- 
+
         import pandas as pd
-        from core.features import FEATURE_COLUMNS
-        X = pd.DataFrame([features])[FEATURE_COLUMNS]
- 
-        confidence_score = self.gb_model.predict_proba(X)[0][1]
-        anomaly_flag = self.iso_forest.predict(X)[0]
-        is_anomaly = anomaly_flag == -1
- 
+        row = pd.DataFrame([features])
+
+        # Columns come from each model rather than from FEATURE_COLUMNS. The two
+        # drifted when FEATURE_COLUMNS grew to 14 while the IP model stayed at
+        # the 7 it was fitted on, and every infrastructure score raised
+        # ValueError until this started reading the model's own list.
+        def matrix(model):
+            return row.reindex(columns=list(model.feature_names_in_), fill_value=0).fillna(0)
+
+        confidence_score = gb.predict_proba(matrix(gb))[0][1]
+        is_anomaly = iso.predict(matrix(iso))[0] == -1
+
         return {
             "confidence_score": round(float(confidence_score), 4),
             "is_anomaly": is_anomaly,
+            "model": f"domain_{DOMAIN_MODEL_TAG}" if use_domain else "ip",
             **self._risk_fields(confidence_score),
             "features_used": features,
         }
@@ -284,6 +321,70 @@ class ConfidenceScorer:
             "sample_count": sample_count,
             "note": "Score derived from MalwareBazaar sample volume and malware category tags.",
         }
+
+    # VirusTotal detections earning full marks on a file. Roughly 70 engines
+    # scan a sample: established malware lands in the 55-70 range, while a one
+    # or two vendor hit is more often a false positive than a find. Saturating
+    # at 40 tops out a confidently detected sample without demanding unanimity.
+    HASH_DETECTION_FULL_MARKS = 40
+
+    def score_hash(self, pivot_result: dict) -> dict:
+        """
+        Scores a file hash from what a hash pivot actually collects: VirusTotal
+        detections, MalwareBazaar corroboration, and ATT&CK coverage.
+
+        Deliberately not routed through the infrastructure model. That model
+        reads open ports, DNS records and hosting country, none of which a file
+        has, so every hash landed on the same point in its feature space and
+        scored identically — 0.956 for all fourteen across saved investigations.
+        """
+        results = pivot_result.get("results", {})
+        vt = results.get("virustotal", {}) or {}
+        bazaar = results.get("malwarebazaar", {}) or {}
+        mitre = results.get("mitre", {}) or {}
+
+        # An error is an unanswered question, not a verdict of zero detections.
+        vt_answered = "error" not in vt and "malicious_votes" in vt
+        detections = vt.get("malicious_votes", 0) if vt_answered else 0
+        in_bazaar = bool(bazaar.get("found"))
+        in_attack = bool(mitre.get("found"))
+
+        # Silence from every source is not a clean bill of health. A hash nobody
+        # has seen is unknown, and reporting LOW would read as "checked, fine".
+        if not vt_answered and not in_bazaar and not in_attack:
+            return {
+                "confidence_score": 0.0,
+                "is_anomaly": False,
+                "risk_level": "UNKNOWN",
+                "note": "No VirusTotal, MalwareBazaar or ATT&CK record for this hash.",
+            }
+
+        detection_score = min(detections / self.HASH_DETECTION_FULL_MARKS, 1.0)
+
+        # Corroboration is scored separately because being catalogued by
+        # MalwareBazaar or profiled in ATT&CK means a human classified the
+        # sample, which a detection count on its own does not.
+        high_risk_tags = {"ransomware", "rat", "stealer", "backdoor", "loader", "worm", "rootkit"}
+        tags = {str(t).lower() for t in (bazaar.get("tags") or [])}
+
+        corroboration = 0.0
+        if in_bazaar:
+            corroboration += 0.5
+        if tags & high_risk_tags:
+            corroboration += 0.25
+        if in_attack:
+            corroboration += 0.25
+
+        confidence_score = (detection_score * 0.65) + (corroboration * 0.35)
+
+        return {
+            "confidence_score": round(confidence_score, 4),
+            "is_anomaly": False,
+            **self._risk_fields(confidence_score, thresholds=(0.65, 0.4)),
+            "detections": detections,
+            "malware_family": vt.get("malware_family") or bazaar.get("malware_family"),
+            "note": "Score derived from VirusTotal detections, MalwareBazaar catalogue and ATT&CK coverage.",
+        }
  
     def score_identity(self, pivot_result: dict) -> dict:
         """
@@ -332,15 +433,18 @@ class ConfidenceScorer:
         Routing:
           threat_group -> score_threat_group (MITRE ATT&CK coverage)
           software     -> score_software     (MalwareBazaar sample volume)
+          hash         -> score_hash         (detections, catalogue, ATT&CK)
           email/username/filename -> score_identity (SpiderFoot findings)
-          ipv4/domain/hash/other  -> score (ML model, infrastructure features)
+          ipv4/domain/other       -> score (ML model, infrastructure features)
         """
         indicator_type = pivot_result.get("type", "")
- 
+
         if indicator_type == "threat_group":
             return self.score_threat_group(pivot_result)
         elif indicator_type == "software":
             return self.score_software(pivot_result)
+        elif indicator_type == "hash":
+            return self.score_hash(pivot_result)
         elif indicator_type in {"email", "username", "filename"}:
             return self.score_identity(pivot_result)
         else:

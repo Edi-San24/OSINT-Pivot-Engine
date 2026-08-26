@@ -86,7 +86,12 @@ def generate_training_data() -> tuple:
 
     return X, y
 
-def train_models(dataset: str = "ip"):
+def train_models(
+    dataset: str = "ip",
+    exclude: list | None = None,
+    tag: str = "",
+    data_path: str | None = None,
+):
     """
     Trains Isolation Forest and Gradient Boosting models.
     Logs all experiments and registers models with MLflow.
@@ -96,16 +101,29 @@ def train_models(dataset: str = "ip"):
     services the domain pivot never calls, so their features are zero on every
     domain row. Training on one and serving the other loses a third of the
     learned signal, which is what the live engine was doing.
+
+    exclude drops named features before fitting, for comparing variants on one
+    dataset. tag keeps each variant in its own model files — placed before
+    "_domain" so the result still matches the ignore rule that keeps domain
+    models local.
     """
     domain_mode = dataset == "domain"
-    path = DOMAIN_TRAINING_DATA_PATH if domain_mode else TRAINING_DATA_PATH
-    suffix = "_domain" if domain_mode else ""
+    path = data_path or (DOMAIN_TRAINING_DATA_PATH if domain_mode else TRAINING_DATA_PATH)
+    suffix = f"_{tag}" if tag else ""
+    suffix = f"{suffix}_domain" if domain_mode else suffix
 
     print(f"[*] Loading {dataset} training data...")
     X, y = load_training_data(path)
 
     X = X.fillna(0)
     X = X[FEATURE_COLUMNS]
+
+    if exclude:
+        unknown = [c for c in exclude if c not in X.columns]
+        if unknown:
+            raise ValueError(f"Cannot exclude unknown feature(s): {unknown}")
+        X = X.drop(columns=list(exclude))
+        print(f"[!] Excluded {len(exclude)} feature(s): {list(exclude)}")
 
     # Constant columns carry no signal and invite the model to split on noise.
     # On the domain set that drops shodan_blocked, total_open_ports and
@@ -167,6 +185,16 @@ def train_models(dataset: str = "ip"):
         print(f"[+] Gradient Boosting trained. ROC-AUC: {roc_auc:.4f}")
         print(classification_report(y_test, y_pred))
 
+        # Printed because the split is the finding, not the score. An ROC-AUC of
+        # 1.0000 next to one feature at 0.90 importance is a leak, not a result.
+        print("[*] Feature importances:")
+        ranked = sorted(
+            zip(trained_columns, gb_model.feature_importances_),
+            key=lambda pair: pair[1], reverse=True,
+        )
+        for name, importance in ranked:
+            print(f"      {name:20} {importance:.4f}")
+
     # The column list travels with the models. Scoring must build its matrix in
     # the same order and without the dropped columns, and a silent mismatch
     # would be scored rather than raised.
@@ -179,4 +207,17 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Train the scoring models.")
     parser.add_argument("--dataset", choices=("ip", "domain"), default="ip")
-    train_models(parser.parse_args().dataset)
+    parser.add_argument(
+        "--exclude", default="",
+        help="Comma-separated features to drop before fitting.",
+    )
+    parser.add_argument("--tag", default="", help="Names the variant's model files.")
+    parser.add_argument("--data", help="Dataset CSV to train on.")
+    args = parser.parse_args()
+
+    train_models(
+        args.dataset,
+        exclude=[c.strip() for c in args.exclude.split(",") if c.strip()],
+        tag=args.tag,
+        data_path=args.data,
+    )
