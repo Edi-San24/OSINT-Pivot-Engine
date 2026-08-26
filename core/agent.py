@@ -126,8 +126,10 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             if is_ipv4(ip) and ip not in visited:
                 new_indicators.append(ip)
 
-        censys = results.get("censys", {})
-        for cert in censys.get("certificates", []):
+        # crt.sh moved to its own key; older saved investigations still have
+        # it under "censys".
+        certs = results.get("crtsh") or results.get("censys") or {}
+        for cert in certs.get("certificates", []):
             names = cert.get("names", "")
             for name in names.replace("\n", ",").split(","):
                 name = name.strip().lstrip("*.")

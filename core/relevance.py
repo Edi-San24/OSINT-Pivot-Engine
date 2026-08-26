@@ -103,15 +103,16 @@ def _harvest(pivot_results: list) -> dict:
             except ValueError:
                 domains.add(value.lower())
 
-        censys = results.get("censys", {})
-        for cert in censys.get("certificates", []):
+        certs = results.get("crtsh") or results.get("censys") or {}
+        for cert in certs.get("certificates", []):
             for name in (cert.get("names", "") or "").replace("\n", ",").split(","):
                 name = name.strip().lstrip("*.").lower()
                 if name:
                     domains.add(name)
 
-        # Hosting identity, for ASN and provider matching
-        for value in (censys.get("autonomous_system", ""),
+        # Hosting identity, for ASN and provider matching. Still Censys proper —
+        # only the certificate lookup moved to its own key.
+        for value in ((results.get("censys") or {}).get("autonomous_system", ""),
                       results.get("shodan", {}).get("organization", ""),
                       results.get("virustotal", {}).get("owner", "")):
             if value:

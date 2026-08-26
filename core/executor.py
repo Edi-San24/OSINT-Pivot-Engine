@@ -199,7 +199,10 @@ class PivotExecutor:
             # for the other, and only a live query sees a wildcard zone.
             "dns": lambda: self.dns.query_domain(domain),
             "passivedns": lambda: self.passivedns.query_domain(domain),
-            "censys": lambda: self.censys.query_domain_certificates(domain),
+            # Its own key. This is crt.sh, not Censys, and filing it under
+            # "censys" meant every crt.sh 502 was reported as a Censys failure —
+            # days spent suspecting the wrong service.
+            "crtsh": lambda: self.censys.query_domain_certificates(domain),
             "ahmia": lambda: self.ahmia.search(domain),
             "urlhaus": lambda: self.urlhaus.query_host(domain),
             "otx": lambda: self.otx.query_indicator(domain, "domain"),

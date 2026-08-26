@@ -21,6 +21,34 @@ class CensysConnector:
             "Accept": "application/vnd.censys.api.v3.host.v1+json"
         }
 
+    @staticmethod
+    def _explain(response, indicator: str) -> dict:
+        """
+        Turns a Censys failure into something an analyst can act on.
+
+        A 422 here carries {"errors":[{"message":"insufficient balance"}]} — the
+        account is out of credits, not the request malformed. Reported plainly
+        because "422 Unprocessable Entity" reads like a code fault and sent me
+        looking for an API contract change that had not happened.
+        """
+        detail = ""
+        try:
+            body = response.json()
+            detail = "; ".join(
+                e.get("message", "") for e in (body.get("errors") or [])
+            ) or body.get("detail", "")
+        except Exception:
+            detail = (response.text or "")[:120]
+
+        if "balance" in detail.lower() or "quota" in detail.lower():
+            detail = f"{detail} — Censys account has no remaining credits"
+
+        return {
+            "error": f"HTTP {response.status_code}: {detail}"[:200],
+            "indicator": indicator,
+            "source": "censys",
+        }
+
     def query_ip(self, ip: str) -> dict:
         """
         Queries Censys for a given IP address.
@@ -29,7 +57,9 @@ class CensysConnector:
         url = f"{self.BASE_URL}/asset/host/{ip}"
 
         try:
-            response = requests.get(url, headers=self.headers)
+            response = requests.get(url, headers=self.headers, timeout=20)
+            if not response.ok:
+                return self._explain(response, ip)
             response.raise_for_status()
             data = response.json()
 
@@ -64,7 +94,9 @@ class CensysConnector:
         url = f"{self.BASE_URL}/asset/host/{domain}"
 
         try:
-            response = requests.get(url, headers=self.headers)
+            response = requests.get(url, headers=self.headers, timeout=20)
+            if not response.ok:
+                return self._explain(response, domain)
             response.raise_for_status()
             data = response.json()
 
