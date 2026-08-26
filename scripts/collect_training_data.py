@@ -8,6 +8,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import argparse
 import socket
 import threading
 
@@ -19,7 +20,7 @@ import logging
 from urllib.parse import urlparse
 from core.features import extract_features, FEATURE_COLUMNS
 from core.executor import PivotExecutor, _run_parallel
-from config import DATA_DIR
+from config import DATA_DIR, THREATFOX_API_KEY
 
 # Dedicated logger — avoids conflict with executor's logging config.
 # propagate=False is load-bearing: importing PivotExecutor runs
@@ -339,11 +340,146 @@ def collect_features(ips: list, label: int) -> list:
     return samples
 
 
+# Separate file, because a domain row and an IP row are not interchangeable.
+# Three of the seven original features come from Shodan and Censys, which are IP
+# services the domain pivot never calls, so they are structurally zero on every
+# domain. A model trained on IP rows and served domain rows loses a third of its
+# learned signal to that mismatch — which is what the live engine was doing.
+DOMAIN_OUTPUT_PATH = os.path.join(DATA_DIR, "training_data_domains.csv")
+
+
+def fetch_malicious_domains(limit: int = MALICIOUS_SAMPLE_SIZE) -> list:
+    """
+    Recent malicious domains from ThreatFox and URLhaus.
+
+    Both are free and same-day. URLhaus entries are URLs, so only the host is
+    kept — the feature set describes a domain, not a path.
+    """
+    from urllib.parse import urlparse
+
+    domains: list[str] = []
+
+    try:
+        headers = {"Auth-Key": THREATFOX_API_KEY} if THREATFOX_API_KEY else {}
+        response = requests.post(
+            "https://threatfox-api.abuse.ch/api/v1/",
+            json={"query": "get_iocs", "days": 7},
+            headers=headers, timeout=60,
+        )
+        for row in (response.json().get("data") or []):
+            if row.get("ioc_type") not in ("domain", "url"):
+                continue
+            value = row.get("ioc") or ""
+            host = urlparse(value).hostname if "://" in value else value.split("/")[0]
+            host = (host or "").split(":")[0].strip().lower()
+            if host and "." in host and not host.replace(".", "").isdigit():
+                domains.append(host)
+        logger.info(f"ThreatFox returned {len(domains)} candidate domains.")
+    except Exception as e:
+        logger.warning(f"ThreatFox fetch failed: {str(e)[:100]}")
+
+    try:
+        response = requests.get(
+            "https://urlhaus.abuse.ch/downloads/text_recent/", timeout=60
+        )
+        added = 0
+        for line in response.text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            host = (urlparse(line).hostname or "").split(":")[0].strip().lower()
+            if host and "." in host and not host.replace(".", "").isdigit():
+                domains.append(host)
+                added += 1
+        logger.info(f"URLhaus added {added} candidate domains.")
+    except Exception as e:
+        logger.warning(f"URLhaus fetch failed: {str(e)[:100]}")
+
+    random.shuffle(domains)
+    unique = list(dict.fromkeys(domains))[:limit]
+    logger.info(f"Collected {len(unique)} unique malicious domains.")
+    return unique
+
+
+def fetch_benign_domains(limit: int = BENIGN_SAMPLE_SIZE) -> list:
+    """
+    The clean domain list, used directly rather than resolved to addresses.
+    Never padded by duplication — a smaller real set beats an inflated one.
+    """
+    unique = list(dict.fromkeys(d.lower() for d in CLEAN_DOMAINS))[:limit]
+    logger.info(f"Collected {len(unique)} benign domains.")
+    return unique
+
+
+def collect_domain_features(domains: list, label: int) -> list:
+    """
+    Extracts features for each domain and attaches a label.
+
+    Queries exactly the connectors that feed a domain feature: VirusTotal, RDAP
+    with WHOIS fallback for registration age, live DNS, passive DNS, OTX and
+    URLhaus. Shodan and Censys are skipped because they cannot answer for a
+    domain, and Ahmia because it launches a headless browser per lookup and
+    contributes no feature.
+    """
+    executor = PivotExecutor()
+    samples = []
+    skipped = 0
+
+    for i, domain in enumerate(domains):
+        logger.info(f"Processing {i+1}/{len(domains)}: {domain} (label={label})")
+
+        try:
+            results = _run_parallel({
+                "virustotal": lambda d=domain: executor.vt.query_domain(d),
+                "whois": lambda d=domain: executor._registration(d),
+                "dns": lambda d=domain: executor.dns.query_domain(d),
+                "passivedns": lambda d=domain: executor.passivedns.query_domain(d),
+                "otx": lambda d=domain: executor.otx.query_indicator(d, "domain"),
+                "urlhaus": lambda d=domain: executor.urlhaus.query_host(d),
+            })
+
+            vt_error = results.get("virustotal", {}).get("error")
+            if REQUIRE_VIRUSTOTAL and vt_error:
+                skipped += 1
+                logger.warning(f"  skipped {domain}: VirusTotal {str(vt_error)[:60]}")
+                time.sleep(RATE_LIMIT)
+                continue
+
+            features = extract_features(
+                {"indicator": domain, "type": "domain", "results": results}
+            )
+            features["label"] = label
+            samples.append(features)
+        except Exception as e:
+            logger.error(f"  failed {domain}: {str(e)[:100]}")
+
+        time.sleep(RATE_LIMIT)
+
+    if skipped:
+        logger.warning(
+            f"Skipped {skipped}/{len(domains)} domains with no VirusTotal data. "
+            "Sustained skips mean rate limiting; raise RATE_LIMIT."
+        )
+    return samples
+
+
 def main():
     """
     Orchestrates the data collection pipeline.
     Fetches IOCs, extracts features, and saves to CSV.
+
+    --indicators domain writes a separate dataset. Domain and IP rows are not
+    interchangeable, so they must not be appended to the same file.
     """
+    parser = argparse.ArgumentParser(description="Collect ML training data.")
+    parser.add_argument("--indicators", choices=("ip", "domain"), default="ip")
+    parser.add_argument("--malicious", type=int, default=MALICIOUS_SAMPLE_SIZE)
+    parser.add_argument("--benign", type=int, default=BENIGN_SAMPLE_SIZE)
+    args = parser.parse_args()
+
+    if args.indicators == "domain":
+        return _collect_domains(args.malicious, args.benign)
+
     logger.info("Starting data collection pipeline...")
 
     malicious_ips = fetch_malicious_ips()
@@ -366,6 +502,32 @@ def main():
 
     df.to_csv(OUTPUT_PATH, index=False)
     logger.info(f"Saved {len(df)} samples to {OUTPUT_PATH}")
+    logger.info(f"Malicious: {len(malicious_samples)} | Benign: {len(benign_samples)}")
+
+
+def _collect_domains(malicious_limit: int, benign_limit: int) -> None:
+    """Domain arm of the pipeline, writing to its own dataset."""
+    logger.info("Starting domain data collection...")
+
+    malicious = fetch_malicious_domains(malicious_limit)
+    benign = fetch_benign_domains(benign_limit)
+
+    total = len(malicious) + len(benign)
+    logger.info(
+        f"{total} domains at {RATE_LIMIT}s pacing — roughly "
+        f"{total * RATE_LIMIT / 60:.0f} minutes."
+    )
+
+    malicious_samples = collect_domain_features(malicious, label=1)
+    benign_samples = collect_domain_features(benign, label=0)
+
+    df = pd.DataFrame(malicious_samples + benign_samples).fillna(0)
+    if os.path.exists(DOMAIN_OUTPUT_PATH):
+        existing = pd.read_csv(DOMAIN_OUTPUT_PATH)
+        df = pd.concat([existing, df], ignore_index=True).drop_duplicates()
+
+    df.to_csv(DOMAIN_OUTPUT_PATH, index=False)
+    logger.info(f"Saved {len(df)} domain samples to {DOMAIN_OUTPUT_PATH}")
     logger.info(f"Malicious: {len(malicious_samples)} | Benign: {len(benign_samples)}")
 
 

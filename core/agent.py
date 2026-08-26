@@ -24,6 +24,31 @@ from core.ner_extractor import NERExtractor
 from core.detector import detect_type
 from core.risk import NON_INFRASTRUCTURE_TYPES, DEFAULT_THRESHOLDS, resolve_risk_level
 from core import disagreement
+
+# tier.py is local-only, like the licensed connectors it detects. A public clone
+# does not have it, so a null object stands in — an engine without the module is
+# an engine without the licences, which is exactly the open-source tier.
+try:
+    from core import tier
+except ImportError:
+    class _OpenSourceTier:
+        @staticmethod
+        def active() -> str:
+            return "open-source"
+
+        @staticmethod
+        def licensed_sources() -> list:
+            return []
+
+        @staticmethod
+        def describe() -> str:
+            return "open-source tier — no licensed sources configured."
+
+        @staticmethod
+        def reproducible_without_licence(result: dict) -> bool:
+            return True
+
+    tier = _OpenSourceTier()
 from core.relevance import assess_relevance, load_profile
  
 logging.basicConfig(level=logging.ERROR)
@@ -699,7 +724,9 @@ def summarize(state: AgentState) -> AgentState:
         f"Infrastructure Type: {state['infrastructure_type']}\n"
         # Stated outright rather than left to be inferred from the scores, which
         # read as low rather than absent.
-        f"Sources returned usable data: {'no' if state['insufficient_data'] else 'yes'}\n\n"
+        f"Sources returned usable data: {'no' if state['insufficient_data'] else 'yes'}\n"
+        # So an unlicensed source is not written up as a visibility gap.
+        f"Access tier: {tier.describe()}\n\n"
         f"Key findings:\n{findings_str}\n\n"
         f"Full results:\n{results_str}"
     )
@@ -843,6 +870,11 @@ def run_agent(seed: str, deep: bool = False) -> dict:
     # carries its own verdict. main.py computed this for display only, which left
     # the exported JSON without the one field a reader looks for first.
     result["risk_level"] = resolve_risk_level(result)
+    # Recorded so a saved investigation says which tier produced it, and whether
+    # anyone without the licences could reproduce it.
+    result["tier"] = tier.active()
+    result["licensed_sources"] = tier.licensed_sources()
+    result["reproducible_without_licence"] = tier.reproducible_without_licence(result)
 
     # Logged here rather than in the front ends, so the CLI, TUI and MCP server
     # all record exactly one row per investigation.

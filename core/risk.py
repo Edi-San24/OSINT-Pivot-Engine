@@ -115,11 +115,19 @@ def resolve_risk_level(result: dict) -> str:
 
 def verdict_source(result: dict) -> str:
     """
-    Which input decided the level: "no_data", "agent", or "scorer".
-    Shared so the metrics table and the verdict log cannot drift apart.
+    Which input decided the level: "no_data", "agent", "scorer" or "concur".
+
+    "agent" means the agent's verdict actually overrode the score. When the two
+    reach the same level nothing was overridden, and labelling that an agent
+    verdict overclaimed — 13 of 34 such rows in the verdict log were agreements
+    presented as overrides.
     """
     if not has_evidence(result):
         return "no_data"
     if result.get("indicator_type", "") in SCORER_AUTHORITATIVE_TYPES:
         return "scorer"
-    return "agent" if extract_threat_level(result.get("summary", "")) else "scorer"
+
+    agent_level = extract_threat_level(result.get("summary", ""))
+    if not agent_level:
+        return "scorer"
+    return "agent" if agent_level != score_level(result) else "concur"

@@ -106,6 +106,11 @@ def build_metrics_table(result: dict, verbose: bool = False) -> Table:
         # The scores are real but no assessment was written. Without this the
         # level reads as a considered verdict when nothing considered it.
         label = "[Score-derived; summary unavailable]"
+    elif decided_by == "concur":
+        # Two independent signals landing on the same level is worth saying, and
+        # it is not an override — which "[Agent's Verdict]" implied on 13 of the
+        # 34 runs that carried it.
+        label = "[Agent + score agree]"
     elif decided_by == "agent":
         label = "[Agent's Verdict]"
     elif agent_level and agent_level != risk_level:

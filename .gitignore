@@ -14,3 +14,11 @@ test_connectors.py
 # Licensed source connectors — must never be published.
 connectors/domaintools.py
 connectors/dnsdb.py
+core/tier.py
+
+# Domain models are known-bad: harmless_votes carries 90% of the split because
+# the benign class is 114 household-name domains, and the model calls a
+# legitimate site with zero VirusTotal detections malicious. Kept local until
+# retrained on an ordinary-business benign class.
+models/*_domain.joblib
+models/feature_columns_domain.joblib

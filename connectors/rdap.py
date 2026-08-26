@@ -187,7 +187,13 @@ class RDAPConnector:
                     timeout=REQUEST_TIMEOUT,
                 )
 
-                if response.status_code == 404:
+                # Any client error means this name is not the one the registry
+                # holds — 404 for absent, 400 for a label it will not parse at
+                # all, which is what cloud subdomain hosts like
+                # pub-<hash>.r2.dev return. Either way the parent is still worth
+                # trying; raising here aborted the walk on the first candidate
+                # and left the registration date empty.
+                if 400 <= response.status_code < 500:
                     continue
 
                 response.raise_for_status()
