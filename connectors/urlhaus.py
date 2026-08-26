@@ -36,6 +36,61 @@ class URLhausConnector:
         }
         logger.info("URLhaus connector initialized.")
 
+    def query_url(self, url: str) -> dict:
+        """
+        Queries URLhaus for one exact URL.
+        Distinct from query_host: a host may be clean while a specific path on
+        it is a reported payload URL, and vice versa.
+        """
+        try:
+            response = requests.post(
+                f"{BASE_URL}/url/",
+                data={"url": url},
+                headers=self.headers,
+                timeout=15
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get("query_status") != "ok":
+                return {
+                    "indicator": url,
+                    "type": "url",
+                    "source": "urlhaus",
+                    "found": False,
+                    "reason": data.get("query_status", "unknown")
+                }
+
+            payloads = data.get("payloads") or []
+            return {
+                "indicator": url,
+                "type": "url",
+                "source": "urlhaus",
+                "found": True,
+                "url_status": data.get("url_status", "unknown"),
+                "threat": data.get("threat", "unknown"),
+                "host": data.get("host", "unknown"),
+                "date_added": data.get("date_added", "unknown"),
+                "reporter": data.get("reporter", "unknown"),
+                "tags": data.get("tags") or [],
+                "blacklists": data.get("blacklists") or {},
+                "reference": data.get("urlhaus_reference", ""),
+                # Sample hashes served from this URL. Chained by core.agent, so
+                # a URL seed can reach the payload it delivered.
+                "payloads": [
+                    {
+                        "sha256": pl.get("response_sha256", ""),
+                        "md5": pl.get("response_md5", ""),
+                        "file_type": pl.get("file_type", ""),
+                        "signature": pl.get("signature", ""),
+                    }
+                    for pl in payloads[:URL_PAYLOAD_LIMIT]
+                ],
+            }
+
+        except Exception as e:
+            return {"error": str(e)[:200], "indicator": url, "source": "urlhaus"}
+
     def query_host(self, host: str) -> dict:
         """
         Queries URLhaus for malicious URLs associated with a host.

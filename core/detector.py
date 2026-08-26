@@ -120,6 +120,39 @@ ACTOR_DESIGNATOR = re.compile(
 
 _WHITESPACE = re.compile(r"\s")
 
+# Second-level public suffixes, so stripping a hostname to its registrable
+# domain stops before it returns a public suffix. Not a full PSL — the common
+# ccTLD structures, which is what shows up in practice.
+PUBLIC_SUFFIXES_2LD = {
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "net.uk",
+    "co.za", "org.za", "net.za", "web.za",
+    "com.au", "net.au", "org.au", "edu.au", "gov.au",
+    "co.nz", "net.nz", "org.nz",
+    "co.jp", "ne.jp", "or.jp", "ac.jp",
+    "com.br", "net.br", "org.br",
+    "co.in", "net.in", "org.in", "gov.in",
+    "com.cn", "net.cn", "org.cn",
+    "com.mx", "com.ar", "com.tr", "com.sg", "com.tw", "com.hk",
+    "co.kr", "or.kr", "co.il", "org.il", "co.th", "com.my", "com.ph",
+}
+
+
+def registrable_domain(name: str) -> str:
+    """
+    The registrable domain for a hostname — app.dinkfoundry.com to
+    dinkfoundry.com, a.b.example.co.za to example.co.za.
+
+    Registries and domain-level products index registrable names, not
+    hostnames, so querying the full name returns nothing and reads as "not
+    found" rather than "wrong question".
+    """
+    labels = name.lower().strip(".").split(".")
+    if len(labels) <= 2:
+        return ".".join(labels)
+    if ".".join(labels[-2:]) in PUBLIC_SUFFIXES_2LD:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
 # --- Regex patterns for each indicator type ---
 PATTERNS = {
     "ipv4": re.compile(
@@ -145,6 +178,13 @@ PATTERNS = {
         r"^[a-zA-Z0-9._\-]{3,30}$"
 
     ),
+    # Scheme-prefixed, so it cannot collide with a bare domain. Ports, paths and
+    # query strings all belong to the URL rather than to the host, which is why
+    # the domain pattern rejected them.
+    "url": re.compile(
+        r"^https?://[^\s<>\"{}|\\^`\[\]]+$",
+        re.IGNORECASE,
+    ),
 }
 
 # Priority order matters — more specific patterns run first. Username is last
@@ -154,7 +194,7 @@ PATTERNS = {
 # letter, which is a property of how fast someone types, not of the indicator.
 # Both are resolved by name lookup in detect_type now. The software regex was
 # unreachable anyway — threat_group held an identical pattern and ran first.
-DETECTION_ORDER = ["email", "ipv4", "sha256", "sha1", "md5", "domain", "username"]
+DETECTION_ORDER = ["url", "email", "ipv4", "sha256", "sha1", "md5", "domain", "username"]
 
 
 def _detected(seed: str, indicator_type: str, confidence: str) -> dict:

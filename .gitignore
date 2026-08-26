@@ -10,3 +10,7 @@ org_profile.yaml
 ahmia_debug.html
 .DS_Store
 test_connectors.py
+
+# Licensed source connectors — must never be published.
+connectors/domaintools.py
+connectors/dnsdb.py

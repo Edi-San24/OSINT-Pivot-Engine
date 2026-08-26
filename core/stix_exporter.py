@@ -4,6 +4,8 @@
 
 import json
 import logging
+import re
+import time
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -218,22 +220,66 @@ def _is_under(name: str, parents: set[str]) -> bool:
     return any(name == p or name.endswith("." + p) for p in parents)
 
 
-def _co_hosted_tenants(pivot: dict, investigated_domains: set[str]) -> list[str]:
+# How recently a name must have resolved to an address to count as a current
+# tenant of it. Passive DNS keeps names for years, so without a window the
+# tenancy check answers "who was ever here" rather than "who is here now".
+TENANCY_WINDOW_DAYS = 45
+
+
+def _last_seen_within(record: dict, days: int) -> bool:
+    """
+    Whether a passive DNS record was observed inside the window.
+
+    Sources disagree on units — DNSDB reports epoch seconds, mnemonic reports
+    milliseconds — so anything implausibly large is rescaled. A record carrying
+    no timestamp counts as current, since absence of a date is not evidence the
+    neighbour has gone.
+    """
+    raw = record.get("last_seen") or record.get("time_last")
+    if not raw:
+        return True
+    try:
+        stamp = float(raw)
+    except (TypeError, ValueError):
+        return True
+    if stamp > 1e11:          # milliseconds
+        stamp /= 1000.0
+    return (time.time() - stamp) <= days * 86400
+
+
+def _co_hosted_tenants(pivot: dict, investigated_domains: set[str]) -> list[str] | None:
     """
     Domains on this IP that belong to somebody else.
 
-    A host serving names outside the investigated domains is shared, so
-    publishing its address asks other defenders to block bystanders. This is
-    the check that separates a tenant's own box from a multi-tenant one, and it
-    is deliberately strict: one foreign name is enough.
+    Returns [] when the host is verifiably single-tenant, a list when it is
+    shared, and None when there is no passive DNS coverage to judge by.
+
+    That third case matters. Returning [] for an IP with zero records read as
+    "nobody else is here" when it actually means "we cannot see" — which let
+    162.35.105.61 through as publishable, an address whose reverse DNS is a
+    hosting provider's own nameserver. Same shape as the risk scoring bug where
+    an empty result scored as LOW instead of UNKNOWN.
     """
-    records = (pivot.get("results", {}).get("passivedns") or {}).get("records") or []
+    results = pivot.get("results", {})
+    records = list((results.get("passivedns") or {}).get("records") or [])
+    records.extend((results.get("dnsdb") or {}).get("records") or [])
+    if not records:
+        return None
+
     tenants = []
     for record in records:
         value = (record.get("domain") or record.get("ip") or "").strip().lower()
-        if value and not value.replace(".", "").isdigit():
-            if not _is_under(value, investigated_domains):
-                tenants.append(value)
+        if not value or value.replace(".", "").isdigit():
+            continue
+        if _is_under(value, investigated_domains):
+            continue
+        # Only current neighbours count. Names that stopped resolving here years
+        # ago are not bystanders a block would harm, and counting them excluded
+        # an address whose only live co-tenant was one other domain — DomainTools
+        # said 3 domains on it while this returned 10, nine of them last seen
+        # between 2019 and 2025.
+        if _last_seen_within(record, TENANCY_WINDOW_DAYS):
+            tenants.append(value)
     return sorted(set(tenants))
 
 
@@ -298,6 +344,15 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
 
         if itype == "ipv4":
             tenants = _co_hosted_tenants(pivot, domains)
+            if tenants is None:
+                excluded.append({
+                    "indicator": name,
+                    "reason": (
+                        "tenancy unknown — no passive DNS coverage on this address, "
+                        "so whether it is shared cannot be established"
+                    ),
+                })
+                continue
             if tenants:
                 excluded.append({
                     "indicator": name,
@@ -318,11 +373,69 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
             "engine_risk_level": investigation.get("risk_level", "unknown"),
         })
 
+    # A TLS certificate unique to an investigated domain is a safe, durable
+    # selector — other analysts can hunt it directly. One shared across many
+    # domains is a hosting artifact and says nothing, so the corpus count from
+    # DomainTools decides which is which.
+    for investigation in investigations:
+        for pivot in investigation.get("full_results", []):
+            dt = (pivot.get("results") or {}).get("domaintools") or {}
+            for cert in dt.get("certificates") or []:
+                sha1 = (cert.get("sha1") or "").strip().lower()
+                shared = cert.get("domains_on_cert", 0)
+                if not sha1 or sha1 == "unknown" or sha1 in seen:
+                    continue
+                seen.add(sha1)
+                if shared == 1:
+                    included.append({
+                        "indicator": sha1,
+                        "type": "SSLCertFingerprint",
+                        "engine_risk_level": investigation.get("risk_level", "unknown"),
+                    })
+                else:
+                    excluded.append({
+                        "indicator": sha1,
+                        "reason": (
+                            f"TLS certificate shared across {shared} domains, so it "
+                            "identifies the host rather than this actor"
+                        ),
+                    })
+
     return included, excluded
 
 
+# Indicator-shaped strings, for checking a description does not smuggle any.
+_INDICATOR_SHAPES = re.compile(
+    r"\b(?:"
+    r"(?:\d{1,3}\.){3}\d{1,3}"
+    r"|[a-fA-F0-9]{32,64}"
+    r"|(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+"
+    r"(?:com|net|org|io|click|at|us|za|info|xyz|top|co|biz|ru|cn|link|shop|live)"
+    r")\b"
+)
+
+
+def leaked_indicators(description: str, included: list[dict]) -> list[str]:
+    """
+    Indicator-shaped strings in the description that are not published IOCs.
+
+    OTX's file extractor reads the description as well as the indicator list, so
+    naming an excluded address in prose republishes it. A description that said
+    "neither address is published as an indicator here" put both addresses back
+    in, plus two other researchers' phishing domains cited as context.
+    """
+    published = {i["indicator"].lower() for i in included}
+    leaked = []
+    for match in _INDICATOR_SHAPES.findall(description):
+        value = match.lower().strip(".")
+        if value and value not in published and value not in leaked:
+            leaked.append(value)
+    return leaked
+
+
 def build_pulse(investigations: list[dict], title: str, description: str,
-          tags: list[str] = None, attack_ids: list[str] = None) -> dict:
+          tags: list[str] = None, attack_ids: list[str] = None,
+          exclude: list[str] = None, include: list[str] = None) -> dict:
     """
     Assembles the pulse payload plus an audit of what was left out.
 
@@ -330,6 +443,53 @@ def build_pulse(investigations: list[dict], title: str, description: str,
     object can be uploaded or published without reshaping.
     """
     included, excluded = select_indicators(investigations)
+
+    # Analyst override. The selector judges evidence, not what a destination can
+    # represent — OTX types any 40-char hex as FileHash-SHA1 whatever type is
+    # chosen, which mislabels a certificate fingerprint as a file hash.
+    dropped = {e.strip().lower() for e in (exclude or []) if e.strip()}
+    if dropped:
+        kept = []
+        for entry in included:
+            if entry["indicator"].lower() in dropped:
+                excluded.append({
+                    "indicator": entry["indicator"],
+                    "reason": "excluded by analyst",
+                })
+            else:
+                kept.append(entry)
+        included = kept
+
+    # The mirror of exclude. The selector errs toward protecting bystanders, so
+    # it drops an address with even one live co-tenant. An analyst who has read
+    # the audit trail can put it back, and the description should then say why
+    # blocking it needs care.
+    forced = {i.strip().lower() for i in (include or []) if i.strip()}
+    if forced:
+        published = {e["indicator"].lower() for e in included}
+        remaining = []
+        for entry in excluded:
+            name = entry["indicator"].lower()
+            if name in forced and name not in published:
+                included.append({
+                    "indicator": entry["indicator"],
+                    "type": OTX_TYPES.get(
+                        "ipv4" if name.replace(".", "").isdigit() else "domain",
+                        "domain",
+                    ),
+                    "engine_risk_level": "analyst-included",
+                    "caveat": entry.get("reason", ""),
+                })
+            else:
+                remaining.append(entry)
+        excluded = remaining
+
+    leaked = leaked_indicators(description, included)
+    if leaked:
+        logger.warning(
+            f"Description names {len(leaked)} indicator-shaped string(s) that are "
+            f"not published IOCs; OTX will extract them: {leaked[:6]}"
+        )
 
     return {
         "name": title,
@@ -347,6 +507,7 @@ def build_pulse(investigations: list[dict], title: str, description: str,
         # Not part of the OTX payload. Kept so every dropped indicator has a
         # stated reason rather than vanishing silently.
         "_excluded": excluded,
+        "_description_leaks": leaked,
         "_included_detail": included,
         "_source_investigations": [
             {
@@ -392,6 +553,10 @@ if __name__ == "__main__":
     parser.add_argument("--tags", default="")
     parser.add_argument("--attack-ids", default="")
     parser.add_argument("--output", "-o", default="pulse.json")
+    parser.add_argument("--exclude", default="",
+                        help="Comma-separated indicators to drop from the selection.")
+    parser.add_argument("--include", default="",
+                        help="Comma-separated excluded indicators to publish anyway.")
     args = parser.parse_args()
 
     description = args.description
@@ -410,6 +575,8 @@ if __name__ == "__main__":
         description=description,
         tags=[t.strip() for t in args.tags.split(",") if t.strip()],
         attack_ids=[a.strip() for a in args.attack_ids.split(",") if a.strip()],
+        exclude=[e.strip() for e in args.exclude.split(",") if e.strip()],
+        include=[i.strip() for i in args.include.split(",") if i.strip()],
     )
     clean_path, audit_path = write_pulse(built, args.output)
 

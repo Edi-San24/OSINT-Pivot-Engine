@@ -102,7 +102,14 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
     results = result.get("results", {})
  
     passivedns = results.get("passivedns", {})
-    records = passivedns.get("records", [])
+    records = list(passivedns.get("records", []))
+
+    # DNSDB emits a passivedns-shaped records list, so it chains through the
+    # same branches. Merged rather than substituted — the free tier sometimes
+    # holds records DNSDB's limit truncated, and dedup below handles overlap.
+    dnsdb = results.get("dnsdb", {})
+    if isinstance(dnsdb, dict):
+        records.extend(dnsdb.get("records", []) or [])
  
     if indicator_type == "domain":
         for record in records:
@@ -127,6 +134,17 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
                 if name and is_domain(name) and name not in visited:
                     new_indicators.append(name)
  
+    elif indicator_type == "url":
+        # The host gets its own pivot, and any payload URLhaus recorded is a
+        # sample worth following. Without this a URL seed stopped at one pivot.
+        host = (results.get("url_parts") or {}).get("host") or ""
+        if host and host not in visited:
+            new_indicators.append(host)
+        for payload in (results.get("urlhaus") or {}).get("payloads") or []:
+            sha256 = payload.get("sha256", "")
+            if sha256 and sha256 not in visited:
+                new_indicators.append(sha256)
+
     elif indicator_type == "ipv4":
         for record in records:
             value = record.get("ip", "")

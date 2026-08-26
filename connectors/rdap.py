@@ -13,6 +13,22 @@ BOOTSTRAP_URL = "https://data.iana.org/rdap/dns.json"
 
 REQUEST_TIMEOUT = 10
 
+# Second-level public suffixes, so stripping toward the registrable domain stops
+# before it asks a registry about itself. Not a full public suffix list — the
+# common ccTLD structures, which is what shows up in practice.
+PUBLIC_SUFFIXES_2LD = {
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "net.uk",
+    "co.za", "org.za", "net.za", "web.za",
+    "com.au", "net.au", "org.au", "edu.au", "gov.au",
+    "co.nz", "net.nz", "org.nz",
+    "co.jp", "ne.jp", "or.jp", "ac.jp",
+    "com.br", "net.br", "org.br",
+    "co.in", "net.in", "org.in", "gov.in",
+    "com.cn", "net.cn", "org.cn",
+    "com.mx", "com.ar", "com.tr", "com.sg", "com.tw", "com.hk",
+    "co.kr", "or.kr", "co.il", "org.il", "co.th", "com.my", "com.ph",
+}
+
 # Dates RDAP reports as events, mapped to the field names the WHOIS connector
 # already returns so either source is a drop-in for the other.
 EVENT_FIELDS = {
@@ -124,6 +140,30 @@ class RDAPConnector:
 
         return parsed
 
+    @staticmethod
+    def _candidates(domain: str) -> list[str]:
+        """
+        The name as given, then progressively stripped toward the registrable
+        domain.
+
+        Registries hold records for registrable domains, not hostnames, so
+        app.dinkfoundry.com returns 404 while dinkfoundry.com is a live
+        Namecheap registration. Querying only the full name reported registered
+        domains as unregistered whenever the seed was a subdomain, and the agent
+        then explained the phantom discrepancy as possible "deliberate
+        obfuscation".
+        """
+        labels = domain.lower().strip(".").split(".")
+        candidates = []
+        for i in range(len(labels) - 1):
+            candidate = ".".join(labels[i:])
+            candidates.append(candidate)
+            # Stop once the next strip would leave a public suffix.
+            remainder = ".".join(labels[i + 1:])
+            if len(labels) - (i + 1) < 2 or remainder in PUBLIC_SUFFIXES_2LD:
+                break
+        return candidates
+
     def query_domain(self, domain: str) -> dict:
         """
         Queries the authoritative RDAP server for a domain.
@@ -138,31 +178,43 @@ class RDAPConnector:
                 "source": "rdap",
             }
 
+        candidates = self._candidates(domain)
         try:
-            response = requests.get(
-                f"{server}/domain/{domain}",
-                headers={"Accept": "application/rdap+json"},
-                timeout=REQUEST_TIMEOUT,
-            )
+            for candidate in candidates:
+                response = requests.get(
+                    f"{server}/domain/{candidate}",
+                    headers={"Accept": "application/rdap+json"},
+                    timeout=REQUEST_TIMEOUT,
+                )
 
-            if response.status_code == 404:
-                return {
-                    "indicator": domain,
-                    "type": "domain",
-                    "source": "rdap",
-                    "registrar": "unknown",
-                    "creation_date": "unknown",
-                    "expiration_date": "unknown",
-                    "updated_date": "unknown",
-                    "nameservers": [],
-                    "country": "unknown",
-                    "statuses": [],
-                    "dnssec": False,
-                    "note": "Domain not registered, or removed from the registry.",
-                }
+                if response.status_code == 404:
+                    continue
 
-            response.raise_for_status()
-            return self._parse(response.json(), domain)
+                response.raise_for_status()
+                parsed = self._parse(response.json(), domain)
+                if candidate != domain:
+                    # The registration belongs to the parent, not the seed.
+                    parsed["registrable_domain"] = candidate
+                return parsed
+
+            return {
+                "indicator": domain,
+                "type": "domain",
+                "source": "rdap",
+                "registrar": "unknown",
+                "creation_date": "unknown",
+                "expiration_date": "unknown",
+                "updated_date": "unknown",
+                "nameservers": [],
+                "country": "unknown",
+                "statuses": [],
+                "dnssec": False,
+                "queried": candidates,
+                "note": (
+                    "Not registered, or removed from the registry. Checked "
+                    f"{len(candidates)} name(s) up to the registrable domain."
+                ),
+            }
 
         except Exception as e:
             logger.error(f"RDAP query failed for '{domain}': {str(e)[:100]}")

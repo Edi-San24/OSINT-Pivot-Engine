@@ -33,6 +33,12 @@ WHOISXML_API_KEY = os.getenv("WHOISXML_API_KEY", "")
 MALWAREBAZAAR_API_KEY = os.getenv("THREATFOX_API_KEY")
 OTX_API_KEY = os.getenv("OTX_API_KEY")
 
+# Licensed sources. Their connectors are gitignored, so these read empty on any
+# clone and the engine skips them — see the guarded imports in core/executor.py.
+DOMAINTOOLS_API_USERNAME = os.getenv("DOMAINTOOLS_API_USERNAME", "")
+DOMAINTOOLS_API_KEY = os.getenv("DOMAINTOOLS_API_KEY", "")
+DNSDB_API_KEY = os.getenv("DNSDB_API_KEY", "")
+
 # SpiderFoot is a self-hosted service rather than a hosted API, so this is a
 # URL and not a key. Previously hardcoded in the connector, which meant the
 # setup wizard had nothing to write to.

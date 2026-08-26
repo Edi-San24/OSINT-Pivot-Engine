@@ -5,6 +5,7 @@
 
 import time
 import logging
+from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeout
  
@@ -16,6 +17,18 @@ from connectors.shodan import ShodanConnector
 from connectors.censys import CensysConnector
 from connectors.whois import WHOISConnector
 from connectors.rdap import RDAPConnector
+
+# Licensed sources. Their connectors are gitignored and absent from any clone,
+# so they are imported defensively — the public engine has to run without them.
+try:
+    from connectors.domaintools import DomainToolsConnector
+except ImportError:
+    DomainToolsConnector = None
+
+try:
+    from connectors.dnsdb import DNSDBConnector
+except ImportError:
+    DNSDBConnector = None
 from connectors.dns import DNSConnector
 from connectors.passivedns import PassiveDNSConnector
 from connectors.onion import OnionConnector
@@ -35,7 +48,7 @@ logger = logging.getLogger(__name__)
 # _run_parallel; previously defined and never used.
 REQUEST_TIMEOUT = 25
 ALLOWED_TYPES = {
-    "ipv4", "domain", "md5", "sha1", "sha256",
+    "ipv4", "domain", "url", "md5", "sha1", "sha256",
     "email", "username", "threat_group", "software"
 }
 
@@ -119,6 +132,8 @@ class PivotExecutor:
         self.shodan = ShodanConnector()
         self.whois = WHOISConnector()
         self.rdap = RDAPConnector()
+        self.domaintools = DomainToolsConnector() if DomainToolsConnector else None
+        self.dnsdb = DNSDBConnector() if DNSDBConnector else None
         self.dns = DNSConnector()
         self.passivedns = PassiveDNSConnector()
         self.censys = CensysConnector()
@@ -160,7 +175,13 @@ class PivotExecutor:
             "urlhaus": lambda: self.urlhaus.query_host(ip),
             "otx": lambda: self.otx.query_indicator(ip, "IPv4"),
         }
- 
+        # Alongside the free tier, not instead of it. The reverse lookup here is
+        # what decides shared hosting versus dedicated, which mnemonic cannot
+        # answer, but keeping both means a licence lapse degrades rather than
+        # breaks the pivot.
+        if self.dnsdb:
+            tasks["dnsdb"] = lambda: self.dnsdb.query_ip(ip)
+
         results = _run_parallel(tasks)
         return {"indicator": ip, "type": "ipv4", "results": results}
  
@@ -183,7 +204,15 @@ class PivotExecutor:
             "urlhaus": lambda: self.urlhaus.query_host(domain),
             "otx": lambda: self.otx.query_indicator(domain, "domain"),
         }
- 
+        # Supplements rather than replaces: DomainTools adds registrar and IP
+        # history to the RDAP/WHOIS answer, DNSDB adds observation timestamps to
+        # passive DNS. Both are reported under their own keys so a licensed
+        # result and a public one stay distinguishable.
+        if self.domaintools:
+            tasks["domaintools"] = lambda: self.domaintools.query_domain(domain)
+        if self.dnsdb:
+            tasks["dnsdb"] = lambda: self.dnsdb.query_domain(domain)
+
         results = _run_parallel(tasks)
         return {"indicator": domain, "type": "domain", "results": results}
  
@@ -219,6 +248,39 @@ class PivotExecutor:
 
         fallback["fallback_from_rdap"] = reason
         return fallback
+
+    def pivot_url(self, url: str, deep: bool = False) -> dict:
+        """
+        Queries URLhaus for an exact URL and decomposes it for chaining.
+
+        A URL carries more than its host — the port and path are the lure, and
+        URLhaus indexes the full string. The host is chained separately so the
+        domain or IP still gets its own full pivot.
+        """
+        logger.info(f"Starting URL pivot for: {url[:80]}")
+
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+
+        results = _run_parallel({
+            "urlhaus": lambda: self.urlhaus.query_url(url),
+        })
+
+        # Recorded so the agent can reason about the shape of the lure, which is
+        # often all there is when no source has seen the URL itself.
+        results["url_parts"] = {
+            "source": "url_parts",
+            "scheme": parsed.scheme,
+            "host": host,
+            "port": parsed.port,
+            "path": parsed.path or "/",
+            "query": parsed.query,
+            "non_standard_port": bool(
+                parsed.port and parsed.port not in (80, 443)
+            ),
+        }
+
+        return {"indicator": url, "type": "url", "results": results}
 
     def pivot_hash(self, hash_val: str, deep: bool = False) -> dict:
         """
@@ -453,6 +515,8 @@ class PivotExecutor:
             return self.pivot_ip(indicator, deep=deep)
         elif indicator_type == "domain":
             return self.pivot_domain(indicator, deep=deep)
+        elif indicator_type == "url":
+            return self.pivot_url(indicator, deep=deep)
         elif indicator_type in {"md5", "sha1", "sha256"}:
             return self.pivot_hash(indicator, deep=deep)
         elif indicator_type == "threat_group":
