@@ -2,6 +2,9 @@ mlruns/
 mlflow.db
 *.json
 !.mcp.json
+# Test fixtures are pinned inputs, so they travel with the tests that read them.
+# Licensed source blocks are stripped before anything lands here.
+!tests/fixtures/*.json
 data/
 venv/
 __pycache__/
@@ -16,9 +19,9 @@ connectors/domaintools.py
 connectors/dnsdb.py
 core/tier.py
 
-# Domain models are known-bad: harmless_votes carries 90% of the split because
-# the benign class is 114 household-name domains, and the model calls a
-# legitimate site with zero VirusTotal detections malicious. Kept local until
-# retrained on an ordinary-business benign class.
+# Models stay local even now that the domain one is good. A .joblib is a pickle,
+# so joblib.load() on a file from a pull request is arbitrary code execution, and
+# a subtly retrained model is invisible to review in a way a CSV row is not.
+# tests/test_domain_model.py skips rather than fails when none is installed.
 models/*_domain.joblib
 models/feature_columns_domain.joblib

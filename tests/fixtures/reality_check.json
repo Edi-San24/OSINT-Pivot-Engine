@@ -1,0 +1,1121 @@
+[
+ {
+  "indicator": "eversxcellence.co.za",
+  "type": "domain",
+  "results": {
+   "otx": {
+    "indicator": "eversxcellence.co.za",
+    "type": "domain",
+    "source": "otx",
+    "pulse_count": 2,
+    "pulses": [
+     {
+      "name": "ClickFix Campaign: Compromised South African Business Site",
+      "author": "unknown",
+      "created": "2026-08-24T02:06:59.078000",
+      "tags": [
+       "ClickFix",
+       "social-engineering",
+       "compromised-site",
+       "phishing",
+       "Afrihost",
+       "PowerShell",
+       "mshta",
+       "clipboard-hijacking",
+       "drive-by-compromise",
+       "initial-access"
+      ],
+      "malware_families": [],
+      "targeted_countries": [],
+      "industries": []
+     },
+     {
+      "name": "ClickFix compromise",
+      "author": "unknown",
+      "created": "2026-08-24T00:48:59.058000",
+      "tags": [
+       "ClickFix"
+      ],
+      "malware_families": [],
+      "targeted_countries": [],
+      "industries": []
+     }
+    ]
+   },
+   "censys": {
+    "error": "502 Server Error: Bad Gateway for url: https://crt.sh/?q=eversxcellence.co.za&output=json",
+    "indicator": "eversxcellence.co.za",
+    "source": "crt.sh"
+   },
+   "virustotal": {
+    "indicator": "eversxcellence.co.za",
+    "type": "domain",
+    "source": "virustotal",
+    "malicious_votes": 2,
+    "harmless_votes": 55,
+    "registrar": "Afrihost",
+    "creation_date": 1555340646
+   },
+   "urlhaus": {
+    "indicator": "eversxcellence.co.za",
+    "type": "host",
+    "source": "urlhaus",
+    "found": false,
+    "reason": "no_results"
+   },
+   "whois": {
+    "indicator": "eversxcellence.co.za",
+    "type": "domain",
+    "source": "whois",
+    "registrar": "Afrihost",
+    "creation_date": "2019-04-15",
+    "expiration_date": "2027-04-15",
+    "nameservers": [
+     "ns.dns1.co.za",
+     "ns.dns2.co.za",
+     "ns.otherdns.net",
+     "ns.otherdns.com"
+    ],
+    "country": "unknown",
+    "fallback_from_rdap": "No RDAP service published for this TLD"
+   },
+   "passivedns": {
+    "indicator": "eversxcellence.co.za",
+    "type": "domain",
+    "source": "passivedns",
+    "record_count": 3,
+    "records": [
+     {
+      "ip": "154.0.168.218",
+      "record_type": "a",
+      "first_seen": 1712967644244,
+      "last_seen": 1713012961383
+     },
+     {
+      "ip": "154.0.167.193",
+      "record_type": "a",
+      "first_seen": 1595984607859,
+      "last_seen": 1707742602738
+     },
+     {
+      "ip": "41.204.202.8",
+      "record_type": "a",
+      "first_seen": 1560450709846,
+      "last_seen": 1591202180256
+     }
+    ]
+   },
+   "dns": {
+    "indicator": "eversxcellence.co.za",
+    "type": "domain",
+    "source": "dns",
+    "resolves": true,
+    "a": [
+     "154.0.168.218"
+    ],
+    "aaaa": [],
+    "cname": [],
+    "nameservers": [
+     "ns.dns1.co.za",
+     "ns.dns2.co.za",
+     "ns.otherdns.com",
+     "ns.otherdns.net"
+    ],
+    "mx": [
+     "10 mail.eversxcellence.co.za"
+    ],
+    "wildcard": {
+     "checked": true,
+     "zone_apex": "eversxcellence.co.za",
+     "is_wildcard": true,
+     "probe": "qpe6wl3inzvwjc51.eversxcellence.co.za",
+     "probe_resolved_to": [
+      "154.0.168.218"
+     ]
+    }
+   },
+   "ahmia": {
+    "indicator": "eversxcellence.co.za",
+    "source": "dark_web_search",
+    "result_count": 0,
+    "results": []
+   }
+  }
+ },
+ {
+  "indicator": "thekinsmenservers.com",
+  "type": "domain",
+  "results": {
+   "dns": {
+    "indicator": "thekinsmenservers.com",
+    "type": "domain",
+    "source": "dns",
+    "resolves": true,
+    "a": [
+     "104.21.65.123",
+     "172.67.163.51"
+    ],
+    "aaaa": [
+     "2606:4700:3032::6815:417b",
+     "2606:4700:3035::ac43:a333"
+    ],
+    "cname": [],
+    "nameservers": [
+     "leah.ns.cloudflare.com",
+     "leonidas.ns.cloudflare.com"
+    ],
+    "mx": [
+     "10 mail.thekinsmenservers.com"
+    ],
+    "wildcard": {
+     "checked": true,
+     "zone_apex": "thekinsmenservers.com",
+     "is_wildcard": false,
+     "probe": "xq5la9e11mqa1t8m.thekinsmenservers.com",
+     "probe_resolved_to": []
+    }
+   },
+   "whois": {
+    "indicator": "thekinsmenservers.com",
+    "type": "domain",
+    "source": "rdap",
+    "registrar": "OwnRegistrar, Inc.",
+    "creation_date": "2024-11-22",
+    "expiration_date": "2029-11-22",
+    "updated_date": "2026-07-13",
+    "nameservers": [
+     "LEAH.NS.CLOUDFLARE.COM",
+     "LEONIDAS.NS.CLOUDFLARE.COM"
+    ],
+    "country": "unknown",
+    "statuses": [
+     "client transfer prohibited"
+    ],
+    "dnssec": false
+   },
+   "censys": {
+    "error": "502 Server Error: Bad Gateway for url: https://crt.sh/?q=thekinsmenservers.com&output=json",
+    "indicator": "thekinsmenservers.com",
+    "source": "crt.sh"
+   },
+   "urlhaus": {
+    "indicator": "thekinsmenservers.com",
+    "type": "host",
+    "source": "urlhaus",
+    "found": false,
+    "reason": "no_results"
+   },
+   "virustotal": {
+    "indicator": "thekinsmenservers.com",
+    "type": "domain",
+    "source": "virustotal",
+    "malicious_votes": 0,
+    "harmless_votes": 55,
+    "registrar": "OwnRegistrar, Inc.",
+    "creation_date": 1732263315
+   },
+   "otx": {
+    "indicator": "thekinsmenservers.com",
+    "type": "domain",
+    "source": "otx",
+    "pulse_count": 0,
+    "pulse_count_including_own": 0,
+    "own_pulse_count": 0,
+    "own_pulses": [],
+    "self_filter_applied": true,
+    "pulses": []
+   },
+   "passivedns": {
+    "indicator": "thekinsmenservers.com",
+    "type": "domain",
+    "source": "passivedns",
+    "record_count": 0,
+    "records": []
+   },
+   "ahmia": {
+    "indicator": "thekinsmenservers.com",
+    "source": "dark_web_search",
+    "result_count": 0,
+    "results": []
+   }
+  }
+ },
+ {
+  "indicator": "briansclub.cm",
+  "type": "domain",
+  "results": {
+   "virustotal": {
+    "indicator": "briansclub.cm",
+    "type": "domain",
+    "source": "virustotal",
+    "malicious_votes": 0,
+    "harmless_votes": 55,
+    "registrar": "Netcom.cm Sarl",
+    "creation_date": 1522788406
+   },
+   "whois": {
+    "indicator": "briansclub.cm",
+    "type": "domain",
+    "source": "whois",
+    "registrar": "Netcom.cm Sarl",
+    "creation_date": "2018-04-03",
+    "expiration_date": "2027-04-03",
+    "nameservers": [
+     "ns1.ttxdns.com",
+     "ns2.ttxdns.com"
+    ],
+    "country": "unknown"
+   },
+   "passivedns": {
+    "indicator": "briansclub.cm",
+    "type": "domain",
+    "source": "passivedns",
+    "record_count": 10,
+    "records": [
+     {
+      "ip": "79.137.192.3",
+      "record_type": "a",
+      "first_seen": 1700880410669,
+      "last_seen": 1705802075634
+     },
+     {
+      "ip": "51.250.89.173",
+      "record_type": "a",
+      "first_seen": 1696713538223,
+      "last_seen": 1697112488186
+     },
+     {
+      "ip": "80.66.64.115",
+      "record_type": "a",
+      "first_seen": 1696672400489,
+      "last_seen": 1696672400489
+     },
+     {
+      "ip": "158.160.64.49",
+      "record_type": "a",
+      "first_seen": 1696209561053,
+      "last_seen": 1696209585809
+     },
+     {
+      "ip": "185.106.93.93",
+      "record_type": "a",
+      "first_seen": 1693900713899,
+      "last_seen": 1694128127681
+     },
+     {
+      "ip": "158.160.36.216",
+      "record_type": "a",
+      "first_seen": 1693425224511,
+      "last_seen": 1693425224511
+     },
+     {
+      "ip": "51.250.98.111",
+      "record_type": "a",
+      "first_seen": 1692097952596,
+      "last_seen": 1692097952596
+     },
+     {
+      "ip": "47.88.7.238",
+      "record_type": "a",
+      "first_seen": 1686830737971,
+      "last_seen": 1691088913724
+     },
+     {
+      "ip": "176.124.193.40",
+      "record_type": "a",
+      "first_seen": 1684267831450,
+      "last_seen": 1685254954714
+     },
+     {
+      "ip": "185.149.120.61",
+      "record_type": "a",
+      "first_seen": 1672857949838,
+      "last_seen": 1680563649351
+     }
+    ]
+   },
+   "censys": {
+    "error": "HTTPSConnectionPool(host='crt.sh', port=443): Read timed out. (read timeout=30)",
+    "indicator": "briansclub.cm",
+    "source": "crt.sh"
+   },
+   "ahmia": {
+    "indicator": "briansclub.cm",
+    "source": "dark_web_search",
+    "result_count": 0,
+    "results": []
+   }
+  }
+ },
+ {
+  "indicator": "shhsift.click",
+  "type": "domain",
+  "results": {
+   "virustotal": {
+    "indicator": "shhsift.click",
+    "type": "domain",
+    "source": "virustotal",
+    "malicious_votes": 4,
+    "harmless_votes": 51,
+    "registrar": "Dynadot, LLC",
+    "creation_date": 1786618158
+   },
+   "urlhaus": {
+    "indicator": "shhsift.click",
+    "type": "host",
+    "source": "urlhaus",
+    "found": false,
+    "reason": "no_results"
+   },
+   "otx": {
+    "indicator": "shhsift.click",
+    "type": "domain",
+    "source": "otx",
+    "pulse_count": 0,
+    "pulse_count_including_own": 0,
+    "own_pulse_count": 0,
+    "own_pulses": [],
+    "self_filter_applied": true,
+    "pulses": []
+   },
+   "whois": {
+    "indicator": "shhsift.click",
+    "type": "domain",
+    "source": "rdap",
+    "registrar": "Dynadot, LLC",
+    "creation_date": "2026-08-13",
+    "expiration_date": "2027-08-13",
+    "updated_date": "2026-08-18",
+    "nameservers": [
+     "ns1.dyna-ns.net",
+     "ns2.dyna-ns.net"
+    ],
+    "country": "94401",
+    "statuses": [
+     "client transfer prohibited"
+    ],
+    "dnssec": false
+   },
+   "passivedns": {
+    "indicator": "shhsift.click",
+    "type": "domain",
+    "source": "passivedns",
+    "record_count": 0,
+    "records": []
+   },
+   "ahmia": {
+    "indicator": "shhsift.click",
+    "source": "dark_web_search",
+    "result_count": 0,
+    "results": []
+   },
+   "dns": {
+    "indicator": "shhsift.click",
+    "type": "domain",
+    "source": "dns",
+    "resolves": false,
+    "a": [],
+    "aaaa": [],
+    "cname": [],
+    "nameservers": [],
+    "mx": [],
+    "wildcard": {
+     "checked": false,
+     "reason": "domain does not resolve"
+    }
+   },
+   "censys": {
+    "error": "timed out after 25s",
+    "source": "censys"
+   }
+  }
+ },
+ {
+  "indicator": "93.123.39.37",
+  "type": "ipv4",
+  "results": {
+   "dns": {
+    "indicator": "93.123.39.37",
+    "type": "ipv4",
+    "source": "dns",
+    "ptr": [
+     "vm99477.hosted-by.qwins.co"
+    ],
+    "has_reverse": true
+   },
+   "shodan": {
+    "indicator": "93.123.39.37",
+    "type": "ipv4",
+    "source": "shodan",
+    "open_ports": [
+     22,
+     80
+    ],
+    "hostnames": [
+     "vm99477.hosted-by.qwins.co"
+    ],
+    "tags": [],
+    "cves": [
+     "CVE-2009-2299",
+     "CVE-2013-0942",
+     "CVE-2025-66200",
+     "CVE-2025-49812",
+     "CVE-2024-42516",
+     "CVE-2013-0941",
+     "CVE-2025-49630",
+     "CVE-2013-4365",
+     "CVE-2009-0796",
+     "CVE-2026-48913",
+     "CVE-2026-33857",
+     "CVE-2011-1176",
+     "CVE-2024-38473",
+     "CVE-2024-38476",
+     "CVE-2026-34356",
+     "CVE-2026-44186",
+     "CVE-2024-47252",
+     "CVE-2026-29168",
+     "CVE-2026-33523",
+     "CVE-2007-4723",
+     "CVE-2024-38472",
+     "CVE-2026-42535",
+     "CVE-2024-39573",
+     "CVE-2024-40898",
+     "CVE-2026-49975",
+     "CVE-2026-44631",
+     "CVE-2026-33006",
+     "CVE-2026-42536",
+     "CVE-2025-58098",
+     "CVE-2026-34059",
+     "CVE-2026-44185",
+     "CVE-2013-2765",
+     "CVE-2024-38477",
+     "CVE-2025-65082",
+     "CVE-2025-59775",
+     "CVE-2024-24795",
+     "CVE-2026-33007",
+     "CVE-2012-3526",
+     "CVE-2025-23048",
+     "CVE-2026-34032",
+     "CVE-2024-36387",
+     "CVE-2024-43204",
+     "CVE-2024-43394",
+     "CVE-2026-28780",
+     "CVE-2026-43951",
+     "CVE-2026-29167",
+     "CVE-2026-24072",
+     "CVE-2023-38709",
+     "CVE-2024-38474",
+     "CVE-2026-29169",
+     "CVE-2026-44119",
+     "CVE-2012-4360",
+     "CVE-2012-4001",
+     "CVE-2025-55753",
+     "CVE-2011-2688",
+     "CVE-2024-38475",
+     "CVE-2025-53020",
+     "CVE-2026-34355",
+     "CVE-2026-29170",
+     "CVE-2024-27316"
+    ]
+   },
+   "censys": {
+    "error": "422 Client Error: Unprocessable Entity for url: https://api.platform.censys.io/v3/global/asset/host/93.123.39.37",
+    "indicator": "93.123.39.37",
+    "source": "censys"
+   },
+   "otx": {
+    "indicator": "93.123.39.37",
+    "type": "IPv4",
+    "source": "otx",
+    "pulse_count": 0,
+    "pulse_count_including_own": 0,
+    "own_pulse_count": 0,
+    "own_pulses": [],
+    "self_filter_applied": true,
+    "pulses": []
+   },
+   "urlhaus": {
+    "indicator": "93.123.39.37",
+    "type": "host",
+    "source": "urlhaus",
+    "found": true,
+    "url_count": "1",
+    "online_count": 0,
+    "blacklists": {
+     "spamhaus_dbl": "not listed",
+     "surbl": "not listed"
+    },
+    "urls": [
+     {
+      "url": "http://93.123.39.37/Aqua.arm7",
+      "status": "offline",
+      "malware_family": [
+       "elf",
+       "mirai"
+      ],
+      "date_added": "2024-05-26 18:42:05 UTC"
+     }
+    ]
+   },
+   "virustotal": {
+    "indicator": "93.123.39.37",
+    "type": "ipv4",
+    "source": "virustotal",
+    "malicious_votes": 2,
+    "harmless_votes": 52,
+    "country": "EE",
+    "owner": "QWINS LTD"
+   },
+   "passivedns": {
+    "indicator": "93.123.39.37",
+    "type": "ipv4",
+    "source": "passivedns",
+    "record_count": 10,
+    "records": [
+     {
+      "domain": "prophotocoach.com",
+      "record_type": "a",
+      "first_seen": 1729758566785,
+      "last_seen": 1729849344757
+     },
+     {
+      "domain": "kalmadesign.com",
+      "record_type": "a",
+      "first_seen": 1729758338063,
+      "last_seen": 1729848837551
+     },
+     {
+      "domain": "plasticsurgeonsontario.com",
+      "record_type": "a",
+      "first_seen": 1729759896820,
+      "last_seen": 1729805050332
+     },
+     {
+      "domain": "tailormade-travel.com",
+      "record_type": "a",
+      "first_seen": 1729759700565,
+      "last_seen": 1729804998574
+     },
+     {
+      "domain": "searchohiomls.com",
+      "record_type": "a",
+      "first_seen": 1729759525268,
+      "last_seen": 1729804970268
+     },
+     {
+      "domain": "vgmbusiness.com",
+      "record_type": "a",
+      "first_seen": 1729759298846,
+      "last_seen": 1729804428192
+     },
+     {
+      "domain": "eaglevisioncorp.com",
+      "record_type": "a",
+      "first_seen": 1729759236423,
+      "last_seen": 1729804420810
+     },
+     {
+      "domain": "tworiversliftandequipment.com",
+      "record_type": "a",
+      "first_seen": 1729758963369,
+      "last_seen": 1729804347600
+     },
+     {
+      "domain": "exctellio.com",
+      "record_type": "a",
+      "first_seen": 1729758668952,
+      "last_seen": 1729803821949
+     },
+     {
+      "domain": "webdesignlubbock.com",
+      "record_type": "a",
+      "first_seen": 1729758396330,
+      "last_seen": 1729803784599
+     }
+    ]
+   },
+   "ahmia": {
+    "indicator": "93.123.39.37",
+    "source": "dark_web_search",
+    "result_count": 0,
+    "results": []
+   }
+  }
+ },
+ {
+  "indicator": "def3fe8d07d5370ac6e105b1a7872c77e193b4b39a6e1cc9cfc815a36e909904",
+  "type": "hash",
+  "results": {
+   "virustotal": {
+    "indicator": "def3fe8d07d5370ac6e105b1a7872c77e193b4b39a6e1cc9cfc815a36e909904",
+    "type": "hash",
+    "source": "virustotal",
+    "malicious_votes": 59,
+    "harmless_votes": 0,
+    "file_type": "Win32 EXE",
+    "file_name": "def3fe8d07d5370ac6e105b1a7872c77e193b4b39a6e1cc9cfc815a36e909904.exe",
+    "malware_family": "ransomware.akira/filecryptor"
+   },
+   "malwarebazaar": {
+    "indicator": "def3fe8d07d5370ac6e105b1a7872c77e193b4b39a6e1cc9cfc815a36e909904",
+    "type": "hash",
+    "source": "malwarebazaar",
+    "found": true,
+    "file_name": "w.exe",
+    "file_type": "exe",
+    "malware_family": "Akira",
+    "tags": [
+     "akira",
+     "exe",
+     "ransomware"
+    ],
+    "delivery_method": null,
+    "first_seen": "2025-08-26 09:06:02",
+    "last_seen": null,
+    "reporter": "burger403"
+   },
+   "otx": {
+    "indicator": "def3fe8d07d5370ac6e105b1a7872c77e193b4b39a6e1cc9cfc815a36e909904",
+    "type": "FileHash-SHA256",
+    "source": "otx",
+    "pulse_count": 30,
+    "pulses": [
+     {
+      "name": "OSINT Volley 2026-01-07 - AsyncRAT/Akira/SalatStealer",
+      "author": "unknown",
+      "created": "2026-01-07T18:58:50.090000",
+      "tags": [
+       "osint-volley",
+       "threatfox",
+       "automated",
+       "asyncrat",
+       "akira",
+       "salatstealer",
+       "c2-infrastructure"
+      ],
+      "malware_families": [
+       {
+        "id": "AsyncRAT",
+        "display_name": "AsyncRAT",
+        "target": null
+       },
+       {
+        "id": "Akira",
+        "display_name": "Akira",
+        "target": null
+       },
+       {
+        "id": "SalatStealer",
+        "display_name": "SalatStealer",
+        "target": null
+       },
+       {
+        "id": "Aisuru",
+        "display_name": "Aisuru",
+        "target": null
+       },
+       {
+        "id": "Unknown malware",
+        "display_name": "Unknown malware",
+        "target": null
+       }
+      ],
+      "targeted_countries": [],
+      "industries": []
+     },
+     {
+      "name": "OSINT Volley 2026-01-07 - AsyncRAT/Akira/Aisuru",
+      "author": "unknown",
+      "created": "2026-01-07T17:50:07.038000",
+      "tags": [
+       "osint-volley",
+       "threatfox",
+       "automated",
+       "asyncrat",
+       "akira",
+       "aisuru",
+       "c2-infrastructure"
+      ],
+      "malware_families": [
+       {
+        "id": "AsyncRAT",
+        "display_name": "AsyncRAT",
+        "target": null
+       },
+       {
+        "id": "Akira",
+        "display_name": "Akira",
+        "target": null
+       },
+       {
+        "id": "Aisuru",
+        "display_name": "Aisuru",
+        "target": null
+       },
+       {
+        "id": "SalatStealer",
+        "display_name": "SalatStealer",
+        "target": null
+       },
+       {
+        "id": "Unknown malware",
+        "display_name": "Unknown malware",
+        "target": null
+       }
+      ],
+      "targeted_countries": [],
+      "industries": []
+     },
+     {
+      "name": "OSINT Volley 2026-01-07 - AsyncRAT/Akira/Aisuru",
+      "author": "unknown",
+      "created": "2026-01-07T16:50:06.264000",
+      "tags": [
+       "osint-volley",
+       "threatfox",
+       "automated",
+       "asyncrat",
+       "akira",
+       "aisuru",
+       "c2-infrastructure"
+      ],
+      "malware_families": [
+       {
+        "id": "AsyncRAT",
+        "display_name": "AsyncRAT",
+        "target": null
+       },
+       {
+        "id": "Akira",
+        "display_name": "Akira",
+        "target": null
+       },
+       {
+        "id": "Aisuru",
+        "display_name": "Aisuru",
+        "target": null
+       },
+       {
+        "id": "SalatStealer",
+        "display_name": "SalatStealer",
+        "target": null
+       },
+       {
+        "id": "Unknown malware",
+        "display_name": "Unknown malware",
+        "target": null
+       }
+      ],
+      "targeted_countries": [],
+      "industries": []
+     },
+     {
+      "name": "OSINT Volley 2026-01-07 - AsyncRAT/Akira/Aisuru",
+      "author": "unknown",
+      "created": "2026-01-07T16:21:00.653000",
+      "tags": [
+       "osint-volley",
+       "threatfox",
+       "automated",
+       "asyncrat",
+       "akira",
+       "aisuru",
+       "c2-infrastructure"
+      ],
+      "malware_families": [
+       {
+        "id": "AsyncRAT",
+        "display_name": "AsyncRAT",
+        "target": null
+       },
+       {
+        "id": "Akira",
+        "display_name": "Akira",
+        "target": null
+       },
+       {
+        "id": "Aisuru",
+        "display_name": "Aisuru",
+        "target": null
+       },
+       {
+        "id": "SalatStealer",
+        "display_name": "SalatStealer",
+        "target": null
+       },
+       {
+        "id": "Unknown malware",
+        "display_name": "Unknown malware",
+        "target": null
+       }
+      ],
+      "targeted_countries": [],
+      "industries": []
+     },
+     {
+      "name": "OSINT Volley 2026-01-07 - AsyncRAT/Akira/Aisuru",
+      "author": "unknown",
+      "created": "2026-01-07T15:21:09.757000",
+      "tags": [
+       "osint-volley",
+       "threatfox",
+       "automated",
+       "asyncrat",
+       "akira",
+       "aisuru",
+       "c2-infrastructure"
+      ],
+      "malware_families": [
+       {
+        "id": "AsyncRAT",
+        "display_name": "AsyncRAT",
+        "target": null
+       },
+       {
+        "id": "Akira",
+        "display_name": "Akira",
+        "target": null
+       },
+       {
+        "id": "Aisuru",
+        "display_name": "Aisuru",
+        "target": null
+       },
+       {
+        "id": "SalatStealer",
+        "display_name": "SalatStealer",
+        "target": null
+       },
+       {
+        "id": "Unknown malware",
+        "display_name": "Unknown malware",
+        "target": null
+       }
+      ],
+      "targeted_countries": [],
+      "industries": []
+     }
+    ]
+   },
+   "malwarebazaar_related": {
+    "indicator": "Akira",
+    "type": "tag",
+    "source": "malwarebazaar",
+    "found": true,
+    "sample_count": 10,
+    "samples": [
+     {
+      "md5": "b2ee0b89ef1e8d83445e34b54c60eb58",
+      "sha256": "74eb23de1b2fdc7862447dddaadaa82fd5b43659b3c41205a40ea194dff373a9",
+      "malware_family": null,
+      "tags": [
+       "akira",
+       "exe",
+       "Ransomware"
+      ],
+      "first_seen": "2026-03-04 20:01:38"
+     },
+     {
+      "md5": "ae454079c93a7a1ce276756b9d62d196",
+      "sha256": "def3fe8d07d5370ac6e105b1a7872c77e193b4b39a6e1cc9cfc815a36e909904",
+      "malware_family": "Akira",
+      "tags": [
+       "akira",
+       "exe",
+       "Ransomware"
+      ],
+      "first_seen": "2025-08-26 09:06:02"
+     },
+     {
+      "md5": "a97bd3c5d045b8edc01415e6024ed47d",
+      "sha256": "fe9ce5213926fe31b6d7f6f9411ecbad6e088f122b2d33d4ceb54410ccf8182f",
+      "malware_family": "Akira",
+      "tags": [
+       "akira"
+      ],
+      "first_seen": "2025-08-11 16:57:27"
+     },
+     {
+      "md5": "532c04c73f0d1f07888a61c8cd6eeb0a",
+      "sha256": "fe210ab25c1e0f651a93f0f4c5f64091e0e3d45ba80924d9c5dca8339dd3024b",
+      "malware_family": "Akira",
+      "tags": [
+       "akira",
+       "exe"
+      ],
+      "first_seen": "2025-08-06 03:49:47"
+     },
+     {
+      "md5": "e05b0b4188cfd2c91c0a328bde9d0e5b",
+      "sha256": "636feebdc134785412571bf29231038768c81ddee60ddd15e7d928754011f898",
+      "malware_family": "Akira",
+      "tags": [
+       "akira",
+       "exe"
+      ],
+      "first_seen": "2025-07-06 19:25:35"
+     },
+     {
+      "md5": "aa88621587a40bf353cc07a965e00ee2",
+      "sha256": "06c2a137c31aae5d02b4d7df61ffd31f1af9a9e59978f15b3f7265cc751bff1f",
+      "malware_family": "Akira",
+      "tags": [
+       "akira",
+       "exe",
+       "Ransomware"
+      ],
+      "first_seen": "2025-07-05 03:17:49"
+     },
+     {
+      "md5": "17053bba693646bfff25c1a8317f8f16",
+      "sha256": "fc2b499708b2d20545c140906b0484546c8b3ff21341b8a5acd18f2063fa2bb5",
+      "malware_family": "Akira",
+      "tags": [
+       "akira",
+       "exe",
+       "Ransomware"
+      ],
+      "first_seen": "2025-07-02 19:21:17"
+     },
+     {
+      "md5": "5a95f73023aef30c73d34820bbc25631",
+      "sha256": "6e1c3a2825b9121f4553114b9500f41de6bcf38a2aa42f87dbe789b993dbade7",
+      "malware_family": "Akira",
+      "tags": [
+       "akira",
+       "exe",
+       "Ransomware"
+      ],
+      "first_seen": "2025-07-01 08:35:49"
+     },
+     {
+      "md5": "30c74ff0e03d41dcf43257fe54467a02",
+      "sha256": "aa1f4e8e7066b57f594ebed05e931932277c35495ba407f1f97675c6ce4be5cc",
+      "malware_family": "Akira",
+      "tags": [
+       "akira",
+       "exe",
+       "Ransomware"
+      ],
+      "first_seen": "2025-06-29 04:17:18"
+     },
+     {
+      "md5": "a9b65e5f48e5a03080aa2599d2f43c05",
+      "sha256": "d7959a93b70f0a1bb25c08da1f2ff2298e3e6934e7829e5ed148ab8565f59572",
+      "malware_family": "Akira",
+      "tags": [
+       "akira",
+       "exe",
+       "Ransomware"
+      ],
+      "first_seen": "2025-06-29 04:16:57"
+     }
+    ]
+   },
+   "urlhaus": {
+    "indicator": "Akira",
+    "type": "malware_family",
+    "source": "urlhaus",
+    "found": false,
+    "reason": "ok"
+   },
+   "mitre": {
+    "indicator": "ransomware.akira/filecryptor",
+    "type": "software",
+    "source": "mitre_attack",
+    "found": true,
+    "searched_as": "akira",
+    "stix_id": "malware--6f6b2353-4b39-40ce-9d6d-d00b7a61e656",
+    "software_name": "Akira",
+    "software_type": "malware",
+    "description": "[Akira](https://attack.mitre.org/software/S1129) ransomware, written in C++, is most prominently (but not exclusively) associated with the ransomware-as-a-service entity [Akira](https://attack.mitre.org/groups/G1024). [Akira](https://attack.mitre.org/software/S1129) ransomware has been used in attac",
+    "technique_count": 10,
+    "group_count": 1,
+    "techniques": [
+     {
+      "technique_id": "T1083",
+      "name": "File and Directory Discovery",
+      "tactics": [
+       "discovery"
+      ]
+     },
+     {
+      "technique_id": "T1082",
+      "name": "System Information Discovery",
+      "tactics": [
+       "discovery"
+      ]
+     },
+     {
+      "technique_id": "T1059.001",
+      "name": "PowerShell",
+      "tactics": [
+       "execution"
+      ]
+     },
+     {
+      "technique_id": "T1047",
+      "name": "Windows Management Instrumentation",
+      "tactics": [
+       "execution"
+      ]
+     },
+     {
+      "technique_id": "T1059.003",
+      "name": "Windows Command Shell",
+      "tactics": [
+       "execution"
+      ]
+     },
+     {
+      "technique_id": "T1135",
+      "name": "Network Share Discovery",
+      "tactics": [
+       "discovery"
+      ]
+     },
+     {
+      "technique_id": "T1106",
+      "name": "Native API",
+      "tactics": [
+       "execution"
+      ]
+     },
+     {
+      "technique_id": "T1490",
+      "name": "Inhibit System Recovery",
+      "tactics": [
+       "impact"
+      ]
+     },
+     {
+      "technique_id": "T1057",
+      "name": "Process Discovery",
+      "tactics": [
+       "discovery"
+      ]
+     },
+     {
+      "technique_id": "T1486",
+      "name": "Data Encrypted for Impact",
+      "tactics": [
+       "impact"
+      ]
+     }
+    ],
+    "groups": [
+     {
+      "group_id": "G1024",
+      "name": "Akira",
+      "aliases": [
+       "Akira",
+       "GOLD SAHARA",
+       "PUNK SPIDER",
+       "Howling Scorpius"
+      ]
+     }
+    ]
+   }
+  }
+ }
+]
