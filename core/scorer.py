@@ -8,6 +8,12 @@ import numpy as np
 import logging
 from core import hacktivist
 from core.features import extract_features
+# Single source for the level mapping. scorer used to carry its own copy of
+# both the (0.7, 0.4) default and the comparison, so changing one left the
+# other silently disagreeing — the front end and the scorer already diverged
+# that way once, calling the same 0.55 group HIGH on one side and MEDIUM on
+# the other.
+from core.risk import DEFAULT_THRESHOLDS, score_to_risk
 from config import MODEL_DIR
 
 logging.basicConfig(level=logging.ERROR)
@@ -74,16 +80,7 @@ class ConfidenceScorer:
         except FileNotFoundError:
             return None, None
 
-    def _risk_level(self, score: float, thresholds: tuple = (0.7, 0.4)) -> str:
-        """Returns HIGH / MEDIUM / LOW based on score and thresholds."""
-        high, medium = thresholds
-        if score >= high:
-            return "HIGH"
-        elif score >= medium:
-            return "MEDIUM"
-        return "LOW"
-
-    def _risk_fields(self, score: float, thresholds: tuple = (0.7, 0.4)) -> dict:
+    def _risk_fields(self, score: float, thresholds: tuple = DEFAULT_THRESHOLDS) -> dict:
         """
         risk_level plus the thresholds used to reach it.
 
@@ -94,7 +91,7 @@ class ConfidenceScorer:
         because the value round-trips through JSON.
         """
         return {
-            "risk_level": self._risk_level(score, thresholds),
+            "risk_level": score_to_risk(score, thresholds),
             "thresholds": list(thresholds),
         }
  
