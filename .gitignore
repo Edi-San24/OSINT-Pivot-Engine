@@ -5,7 +5,15 @@ mlflow.db
 # Test fixtures are pinned inputs, so they travel with the tests that read them.
 # Licensed source blocks are stripped before anything lands here.
 !tests/fixtures/*.json
-data/
+
+# The domain training set is published so a clone can reproduce the model rather
+# than be handed a pickle. Training is deterministic — random_state=42 throughout
+# — and retraining from this file gives byte-identical predictions. The rest of
+# data/ stays local: collection scratch, the 22MB Tranco list, the verdict log,
+# and the IP sets, which are superseded.
+data/*
+!data/training_data_domains_v2.csv
+!data/README.md
 venv/
 __pycache__/
 .env
