@@ -36,6 +36,7 @@ from connectors.mitre import MITREConnector
 from connectors.bazaar import MalwareBazaarConnector
 from connectors.spiderfoot import SpiderFootConnector
 from connectors.urlhaus import URLhausConnector
+from connectors.threatfox import ThreatFoxConnector
 from connectors.otx import OTXConnector
  
 logging.basicConfig(
@@ -142,6 +143,7 @@ class PivotExecutor:
         self.bazaar = MalwareBazaarConnector()
         self.spiderfoot = SpiderFootConnector()
         self.urlhaus = URLhausConnector()
+        self.threatfox = ThreatFoxConnector()
         self.otx = OTXConnector()
         logger.info("Pivot executor initialized.")
  
@@ -173,6 +175,7 @@ class PivotExecutor:
             "dns": lambda: self.dns.query_ip(ip),
             "ahmia": lambda: self.ahmia.search(ip),
             "urlhaus": lambda: self.urlhaus.query_host(ip),
+            "threatfox": lambda: self.threatfox.query_indicator(ip, "ipv4"),
             "otx": lambda: self.otx.query_indicator(ip, "IPv4"),
         }
         # Alongside the free tier, not instead of it. The reverse lookup here is
@@ -205,6 +208,7 @@ class PivotExecutor:
             "crtsh": lambda: self.censys.query_domain_certificates(domain),
             "ahmia": lambda: self.ahmia.search(domain),
             "urlhaus": lambda: self.urlhaus.query_host(domain),
+            "threatfox": lambda: self.threatfox.query_indicator(domain, "domain"),
             "otx": lambda: self.otx.query_indicator(domain, "domain"),
         }
         # Supplements rather than replaces: DomainTools adds registrar and IP
@@ -267,6 +271,7 @@ class PivotExecutor:
 
         results = _run_parallel({
             "urlhaus": lambda: self.urlhaus.query_url(url),
+            "threatfox": lambda: self.threatfox.query_indicator(url, "url"),
         })
 
         # Recorded so the agent can reason about the shape of the lure, which is
