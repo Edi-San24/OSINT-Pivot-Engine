@@ -146,9 +146,19 @@ class GraphScorer:
 
     def blend_scores(self, ml_score: float, graph_score: float) -> float:
         """
-        Blends the ML confidence score with the graph score.
-        Weights: 70% ML, 30% graph.
-        Graph score acts as an amplifier for borderline indicators.
+        Raises the ML confidence score when chain topology corroborates it.
+        Weights: 70% ML, 30% graph, and never below the ML score alone.
+
+        The floor is the point. This was a plain weighted average, which made a
+        low graph score subtract rather than amplify — and a low graph score is
+        not evidence of anything. It means "not well connected within this pivot
+        chain", which is also what an isolated seed with two pivots looks like.
+        Nothing here can observe benignness, so nothing here should argue for it.
+
+        shhsift.click is the case: an eleven-day-old domain the model scored
+        0.9529, dropped to 0.5003 by a graph score of 0.0 and a temporal score of
+        0.0 on a pivot where all eight temporal features were missing. Two layers
+        with no data removed half the score of a confirmed malicious domain.
         """
         blended = (ml_score * 0.7) + (graph_score * 0.3)
-        return round(min(blended, 1.0), 4)
+        return round(min(max(blended, ml_score), 1.0), 4)

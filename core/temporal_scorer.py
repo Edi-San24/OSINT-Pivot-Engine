@@ -217,10 +217,19 @@ class TemporalScorer:
 
     def blend_with_ml(self, ml_score: float, temporal_score: float) -> float:
         """
-        Blends the ML confidence score with the temporal score.
-        Weights: 75% ML, 25% temporal.
-        Temporal acts as an amplifier for active/novel indicators.
+        Raises the ML confidence score for active or novel indicators.
+        Weights: 75% ML, 25% temporal, and never below the ML score alone.
+
+        The floor matters more here than in the graph layer, because a zero is
+        ambiguous by construction: _recency_score returns 0.0 both for an
+        indicator last seen two years ago and for one with no timestamp at all.
+        Averaging that against a confident model output let missing data
+        subtract 25% of a score.
+
+        Even a genuinely measured zero is not exculpatory. briansclub.cm scored
+        0.0 here on a passive DNS record last seen 951 days ago, which describes
+        the coverage of the source rather than the domain — the site is live.
         """
         blended = (ml_score * 0.75) + (temporal_score * 0.25)
-        return round(min(blended, 1.0), 4)
+        return round(min(max(blended, ml_score), 1.0), 4)
     

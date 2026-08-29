@@ -24,7 +24,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core.graph_scorer import GraphScorer
 from core.risk import DOMAIN_BAND_PRECISION
+from core.temporal_scorer import TemporalScorer
 from core.scorer import ConfidenceScorer
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "reality_check.json")
@@ -141,6 +143,29 @@ def main() -> int:
           f"LOW still documented as non-clearing ({DOMAIN_BAND_PRECISION['LOW']:.0%} malicious)")
     check(DOMAIN_BAND_PRECISION["HIGH"] > DOMAIN_BAND_PRECISION["MEDIUM"] > DOMAIN_BAND_PRECISION["LOW"],
           "band precisions are ordered HIGH > MEDIUM > LOW")
+
+    # The suite previously scored only through ConfidenceScorer, so the blending
+    # layers were never exercised and a bug there went unseen for as long as it
+    # existed: two layers holding no data cut shhsift.click from 0.9529 to
+    # 0.5003, turning a confirmed malicious domain into MEDIUM.
+    print("\n-- blending amplifies, and never subtracts --")
+    graph, temporal = GraphScorer(), TemporalScorer()
+    confident = 0.9529
+
+    check(graph.blend_scores(confident, 0.0) == confident,
+          f"graph floor holds: {confident} + no data -> {graph.blend_scores(confident, 0.0)}")
+    check(temporal.blend_with_ml(confident, 0.0) == confident,
+          f"temporal floor holds: {confident} + no data -> {temporal.blend_with_ml(confident, 0.0)}")
+
+    both = temporal.blend_with_ml(graph.blend_scores(confident, 0.0), 0.0)
+    check(both == confident, f"both layers empty leaves the score intact: {both}")
+
+    # The floor must not cost the layers their actual purpose.
+    check(graph.blend_scores(0.4, 0.9) > 0.4,
+          f"graph still amplifies when corroborated: 0.4 + 0.9 -> {graph.blend_scores(0.4, 0.9)}")
+    check(temporal.blend_with_ml(0.4, 0.9) > 0.4,
+          f"temporal still amplifies when corroborated: 0.4 + 0.9 -> {temporal.blend_with_ml(0.4, 0.9)}")
+    check(graph.blend_scores(0.98, 1.0) <= 1.0, "blend stays within 1.0")
 
     print("\n-- known limitations (recorded, not asserted) --")
     for indicator, reason in KNOWN_LIMITATIONS.items():
