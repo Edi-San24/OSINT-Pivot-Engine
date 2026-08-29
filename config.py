@@ -48,7 +48,7 @@ ENV_PATH = str(PROJECT_ROOT / ".env")
 
 # Single source of truth for the version string. The CLI banner, the help
 # header, and the MCP server declaration all read it from here.
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 #Agent settings
 MAX_PIVOT_DEPTH = 3 # Amount of pivots the agent can make 
