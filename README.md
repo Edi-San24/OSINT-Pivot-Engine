@@ -9,39 +9,50 @@
 ![MCP](https://img.shields.io/badge/MCP-optional-purple)
 ![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
-Pivoting across sources is still manual work, tab by tab and copy-paste by copy-paste, and under incident pressure that is where things get missed. One indicator can touch VirusTotal, Shodan, passive DNS, certificate transparency, ThreatFox, ATT&CK and dark web indexes. This chains those lookups so the analyst spends their time on judgement instead of collection.
+You get a suspicious IP address. Checking it properly means VirusTotal, then Shodan, then passive DNS, then certificate records, then ThreatFox, then whatever those turn up next. Twenty browser tabs later you have lost the thread, and during an actual incident that is where things get missed.
 
-Built for solo analysts, small SOCs without a TIP budget, students and researchers. If you already run Recorded Future or Anomali, you have this and more. If you don't, this closes the gap on free API tiers.
+This does the tab-opening for you. Give it one indicator, get back everything those sources know, what it found by following the trail, and a written assessment.
 
-**Triage, not attribution.** It tells you where to look next. It does not tell you who did it.
+Built for people without a commercial threat intel platform: solo analysts, small security teams, students, researchers. If you already have Recorded Future or Anomali, you have this and more. If you don't, this covers a lot of the same ground using free API tiers.
+
+**It helps you triage, not attribute.** It will tell you an indicator looks dangerous and where to look next. It will not tell you which group is behind it, and you should not use it as though it does.
 
 ---
 
 ## What It Does
 
-- **Chains pivots automatically.** One seed fans out across 14 sources in parallel, then follows what it finds: IPs to domains, domains to certificates, hashes to related samples, URLs to the payloads they served
-- **Profiles threat groups without dead-ending.** Full ATT&CK technique mappings and aliases, chained into MalwareBazaar for samples circulating now. Living-off-the-land binaries are filtered out using MITRE's own classification, so pivots aren't wasted on `netsh`
-- **Scores in layers.** An ML score per indicator type, blended with graph topology and campaign recency, then adjusted down for shared infrastructure like CDNs and Tor exits
-- **Reports absence as absence.** An indicator no source has seen returns `UNKNOWN`, never `LOW`. A failed lookup is never silently scored as a clean result
-- **Protects bystanders when publishing.** The STIX/OTX exporter drops indicators that would take innocent co-tenants with them, and records every exclusion in a local audit file
-- **Stays deterministic.** Findings are read directly from connector output, so two runs on the same data agree. The only model call is the closing summary
+- **Follows the trail on its own.** One indicator goes out to 14 sources at once, then chases whatever comes back: an IP to the domains hosted on it, a domain to its certificates, a file hash to related samples, a URL to the malware it delivered
+- **Looks up threat groups by name.** Search "Lazarus Group" and get their known techniques and aliases from MITRE ATT&CK, plus samples of their malware currently circulating. It skips ordinary Windows tools like `netsh` that attackers borrow, so you don't waste lookups on them
+- **Scores what it finds**, using a model suited to the indicator type, adjusted for how things connect to each other and how recently they were seen. Shared infrastructure like CDNs and Tor exits gets marked down, since plenty of innocent traffic lives there
+- **Says "I don't know" when it doesn't.** If no source has ever seen an indicator, you get `UNKNOWN`, not `LOW`. A lookup that failed is never quietly reported as a clean result
+- **Won't get bystanders blocked.** When you export findings to share, it holds back addresses that host innocent sites alongside the bad one, and writes down what it held back and why
+- **Gives the same answer twice.** Findings come straight from what the sources returned, so two runs on the same data agree. The only AI-written part is the closing summary
 
 ---
 
 ## How It Works
 
 ```
-Seed (IP / Domain / URL / Hash / Email / Username / Threat Group / Malware Family)
-   -> type detection
-   -> pivot chain executor, 14 connectors in parallel
-   -> deterministic findings extraction
-   -> discovered indicators queued, loop until depth cap or queue empty
-   -> ML + graph + temporal scoring, adjusted for infrastructure context
-   -> analyst summary (single LLM call)
-   -> terminal, JSON, or STIX 2.1
+   you type one indicator
+   (IP, domain, URL, file hash, email, username, threat group, malware family)
+            |
+   it works out what kind of thing that is
+            |
+   asks all 14 sources at once
+            |
+   pulls the facts out of what came back
+            |
+   spots new indicators in those answers, and goes round again
+   (until it hits the depth limit or runs out of leads)
+            |
+   scores everything it collected
+            |
+   writes the assessment
+            |
+   prints it, or saves it as JSON or STIX 2.1
 ```
 
-The pivot loop is plain Python. No model decides where to go next, which keeps runs reproducible and cheap: one API call per investigation regardless of depth.
+Nothing in that loop is AI-driven. Ordinary code decides which lookup to run next, so investigations are repeatable and cost the same whether you go two hops deep or five. The only AI call is the summary at the end.
 
 ---
 
@@ -80,15 +91,15 @@ playwright install chromium
 python main.py
 ```
 
-Just start it. If `.env` is missing or a key is blank, a setup wizard walks you through the credentials, marks which are required, and writes `.env` for you.
+Just run it. The first time, a setup wizard asks for your API keys one at a time, tells you what each is for and whether you actually need it, and saves them for you.
 
-Required: VirusTotal, abuse.ch (ThreatFox/MalwareBazaar), OTX. Optional: Anthropic (writes the summary), Shodan, Censys, SpiderFoot. Anything you skip means those lookups return nothing rather than breaking the run. The ATT&CK STIX bundle caches to `data/` on first run.
+You need VirusTotal, abuse.ch (covers ThreatFox and MalwareBazaar) and OTX. Optional: Anthropic to write the summaries, plus Shodan, Censys and SpiderFoot. Skipping an optional one just means those lookups come back empty; nothing breaks.
 
 ---
 
 ## Usage
 
-Run with no arguments for the terminal UI: three panels, every option a toggle. Pass any flag for the non-interactive CLI.
+Run it with no arguments and you get a full-screen terminal app, where every option is a toggle and you can click past investigations to reload them. Add any flag and you get the plain command-line version instead, which is what you want for scripting.
 
 ```bash
 python main.py --seed "185.220.101.45"                     # basic investigation
@@ -99,64 +110,83 @@ python main.py --seed "analyst@example.com" --deep         # SpiderFoot for emai
 python main.py --seed "185.220.101.45" --verbose           # show how the score was derived
 ```
 
-TUI keys: `Enter` run · `ctrl+p` pick a discovered indicator to pivot into · `ctrl+l` clear · `Escape` quit.
+In the terminal app: `Enter` runs it, `ctrl+p` lists every indicator the investigation turned up so you can jump straight into one, `ctrl+l` clears the screen, `Escape` quits.
 
-**Publishing.** Build an OTX pulse or STIX bundle from a saved investigation:
+**Sharing what you found.** Turn a saved investigation into an OTX pulse or a STIX bundle:
 
 ```bash
 python -m core.stix_exporter investigation.json \
   --title "..." --description @desc.txt --tags "a,b" --attack-ids "T1071.001" -o pulse.json
 ```
 
-This writes `pulse.json` to upload and `pulse.audit.json` to keep. The audit records what was excluded and why, usually co-tenants who would be caught by a block. Indicators named only in the description are flagged, because OTX extracts those too.
+You get two files. Upload `pulse.json`; keep `pulse.audit.json` for yourself. The audit file lists what was left out and why, which is usually innocent sites sharing an address with the malicious one. It also warns you if your write-up mentions an indicator you chose not to publish, because OTX scrapes those out of the description too.
 
 ---
 
-## Scoring, and What It Can't Do
+## How to Read the Score
 
-Infrastructure indicators are scored by a gradient-boosting model; threat groups, malware families, hashes and identities are scored from evidence directly (ATT&CK coverage, sample volume, detection counts).
+Every investigation ends with a score and a HIGH / MEDIUM / LOW label. Here is what those actually mean, measured rather than asserted.
 
-The domain model reads **infrastructure shape**: registration age, nameserver count, MX presence, wildcard zones, DNS record count. It deliberately excludes the VirusTotal columns, which are three views of one number and alone score AUC 0.96: a model leaning on them cannot say anything VirusTotal hasn't already said, and inherits its blind spots.
-
-**5-fold ROC-AUC 0.878 ± 0.037** on 383 labelled domains. `confidence_score` **ranks, it does not calibrate**. `0.67` is not "67% likely malicious". Rather than dress it up, each domain score carries `band_precision`: what its band was measured to mean out-of-fold across eight resampled splits.
-
-| band | domain model | IP model | read it as |
+| label | domain | IP | what to do |
 |---|---|---|---|
-| HIGH `≥ 0.7` | **89%** (1.77x) | **94%** (1.27x) | trustworthy; act on it |
-| MEDIUM `0.4–0.7` | **43%** (0.85x) | **71%** (0.95x) | the model is *uncertain* |
-| LOW `< 0.4` | **20%** (0.40x) | **29%** (0.38x) | **not an all-clear** |
-| base rate | 50.4% malicious | 74.3% malicious | |
+| **HIGH** | 89% were malicious | 94% | Act on it. |
+| **MEDIUM** | 43% | 71% | The tool is unsure. Look yourself. |
+| **LOW** | 20% | 29% | Nothing alarming found. **Not the same as safe.** |
 
-**Read the lift, not the percentage.** The two models were measured on sets with different priors, so the IP model's 94% is *weaker* evidence than the domain model's 89%: 1.27x its base rate against 1.77x. Both numbers travel with their base rate in the output for exactly this reason.
+Read those as "out of every 100 domains this tool called HIGH, 89 really were malicious."
 
-**MEDIUM means uncertainty, not moderate risk.** It sits *below* the prior in both models, so an indicator landing there is slightly less likely to be malicious than one drawn at random from the same set.
+**LOW does not mean clean.** One in five domains it scores LOW turns out to be malicious. The tool is good at spotting infrastructure that looks like an attacker built it, and bad at proving something is fine. So a LOW result means "nothing here stood out", not "this is safe to ignore." The CLI and TUI print that warning on every LOW result rather than leaving you to guess.
 
-**LOW is not an all-clear**, and the CLI and TUI say so on every LOW result. One in five domains scoring LOW is malicious and no threshold repairs it. Even below `0.10` the rate is still 16%. These models flag attacker infrastructure; they cannot clear an indicator.
+**MEDIUM means the tool is confused**, not that risk is moderate. Something landing in MEDIUM is no more likely to be malicious than an indicator picked at random. Treat it as "no useful opinion" and use your own judgement.
 
-Post-hoc calibration was tried and rejected: Platt scaling made expected calibration error *worse* (0.057 → 0.079) and isotonic bought 0.007 at the cost of AUC. At 383 rows both fit noise, so reporting the measured rate beats a transformed number that looks more precise than the data supports.
+**Don't compare the two columns directly.** The IP number looks better than the domain one but is actually weaker, because the IP model was tested against a pool that was mostly malicious to begin with. Getting 94% right there is less impressive than 89% on an evenly split pool. The output includes that background rate next to every score so you can tell the difference.
 
-The IP figures are weaker evidence than the domain ones. That dataset was never re-collected against an ordinary-business benign class, so its benign side still carries the Tor exits and resolved household-name domains that made the first domain model unusable.
+### Two things it reliably gets wrong
 
-Two known blind spots, both pinned in the test suite:
+**A hacked legitimate website slips past.** If someone breaks into a real company's site and serves malware from it, the site itself still looks completely normal: registered years ago, real mail server, stable DNS. The tool reads that shape and says it is fine. It never looks at what the page is actually serving.
 
-- **Compromised legitimate sites are missed.** Their infrastructure is genuinely benign; the maliciousness is in served content, which no feature observes.
-- **Bulk hosting is over-flagged**, for the mirror-image reason: attackers rent bulk hosting.
+**Bulk hosting gets over-flagged.** Cheap shared hosting looks like attacker infrastructure because attackers use cheap shared hosting. A legitimate hosting provider can come back MEDIUM.
+
+Both are pinned in the test suite so a future change cannot quietly make them worse.
+
+<details>
+<summary>The technical detail, if you want it</summary>
+
+Infrastructure indicators go through a gradient-boosting model. Threat groups, malware families, hashes and identities are scored directly from evidence instead (ATT&CK coverage, sample volume, detection counts).
+
+The domain model reads registration age, nameserver count, MX presence, wildcard zones and DNS record count. It deliberately excludes the VirusTotal columns. Those are three views of one number, and on their own they score AUC 0.96, so a model leaning on them just repeats what VirusTotal already told you and inherits its blind spots too.
+
+5-fold ROC-AUC is 0.878 ± 0.037 on 383 labelled domains, and 0.896 ± 0.011 for the IP model. The band percentages above are out-of-fold across eight resampled 5-fold splits.
+
+`confidence_score` ranks, it does not calibrate: 0.67 is not "67% likely malicious". Proper calibration was attempted and abandoned. Platt scaling made the calibration error worse, isotonic gained almost nothing and cost accuracy, and at 383 rows both were fitting noise. Publishing the measured band rate is more honest than a transformed number that looks more precise than the data supports.
+
+The IP figures rest on weaker ground. That dataset was never rebuilt with an ordinary-infrastructure benign class the way the domain one was, so its benign side still contains Tor exit nodes and resolved household-name domains, and averages 4.5 VirusTotal detections against the malicious class's 6.0.
+
+</details>
 
 ---
 
 ## Optional: Org Profile
 
-By default the engine tells you what an indicator is. An org profile also tells you whether it matters to you.
+By default the tool tells you whether an indicator is dangerous. Fill in a profile of your own organisation and it will also tell you whether it is dangerous *to you*.
 
 ```bash
 cp org_profile.example.yaml org_profile.yaml
 ```
 
-`netblocks` catches an investigated IP that is one of your own hosts · `asns` your own hosting · `domains` lookalikes impersonating you · `sectors` and `countries` reporting that names you as a target · `mitigated_techniques` ATT&CK coverage gaps. All optional.
+Fill in whichever you know, skip the rest:
 
-`OWN ASSET` is the one to watch for. It means something you were investigating as an external threat is your own infrastructure, which is a different situation entirely.
+| Field | Catches |
+|---|---|
+| `netblocks` | An IP you are investigating that turns out to be one of your own machines |
+| `asns` | Infrastructure sitting in your own hosting |
+| `domains` | Lookalike domains built to impersonate yours |
+| `sectors`, `countries` | Reporting that names your industry or country as a target |
+| `mitigated_techniques` | Attack techniques you have no defence against yet |
 
-The file is gitignored, and the engine only reports matches it can prove. A stale netblock list gets you silence, never a wrong all-clear.
+Watch for `OWN ASSET`. It means the thing you were investigating as an outside threat is actually your own machine, which is a very different problem and usually an urgent one.
+
+The file is gitignored, since it describes your internal network. The tool only reports matches it can prove, so if your netblock list goes out of date you get silence rather than a false all-clear.
 
 ---
 
@@ -171,7 +201,7 @@ For Claude Code and Claude Desktop. `.mcp.json` is included and uses relative pa
 | `get_raw_pivot_data` | Drill into one connector's raw output from a cached run |
 | `export_stix` | Write a STIX 2.1 bundle |
 
-Raw payloads are cached rather than returned, so drilling into detail never re-spends quota.
+Raw source data is cached rather than handed back, so digging into the detail never spends your API quota twice.
 
 ---
 
@@ -182,14 +212,16 @@ pip install -r requirements-dev.txt
 python tests/test_domain_model.py          # regression suite
 ```
 
-The domain training set ships in `data/training_data_domains_v2.csv`: 383 labelled domains, provenance and limitations in `data/README.md`. Models are **not** committed. A `.joblib` is a pickle, and loading one from a pull request is arbitrary code execution. Train your own, which reproduces the shipped predictions byte-for-byte:
+The training data ships with the repo: 383 labelled domains in `data/training_data_domains_v2.csv`, with where they came from and what is wrong with them in `data/README.md`.
+
+The trained models are **not** included, on purpose. A model file is a Python pickle, and loading one from a stranger's pull request runs their code on your machine. Train your own instead. It reproduces the same predictions exactly:
 
 ```bash
 python core/trainer.py --dataset domain --data data/training_data_domains_v2.csv \
     --tag v2c --exclude harmless_votes,malicious_ratio,malicious_votes,urlhaus_listed
 ```
 
-Collection is `scripts/collect_training_data.py` (`--dry-run` writes the benign sample for review before spending an hour of quota). Experiment tracking runs through MLflow.
+To gather fresh training data, use `scripts/collect_training_data.py`. Run it with `--dry-run` first: it writes out the list of domains it plans to check so you can review them before committing an hour of API quota. Experiment tracking goes through MLflow.
 
 ---
 
