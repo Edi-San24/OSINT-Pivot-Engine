@@ -14,6 +14,7 @@ from core.risk import (
     extract_threat_level,
     resolve_risk_level,
     score_level,
+    score_to_risk,
     verdict_source,
 )
 
@@ -121,9 +122,42 @@ def build_metrics_table(result: dict, verbose: bool = False) -> Table:
     suffix = f"  [dim]{label}[/dim]" if label else ""
     table.add_row("Risk Level", f"[{risk_color}]{risk_level}[/{risk_color}]{suffix}")
 
+    # A LOW here means the model found nothing elevated, which is not the same
+    # as finding the indicator safe. One in five domains scoring LOW was
+    # malicious in validation, and no threshold repairs that, so the label is
+    # spelled out rather than left to be read as an all-clear.
+    if risk_level == "LOW" and result.get("band_precision") is not None:
+        table.add_row("", "")
+        table.add_row(
+            "[yellow]Note[/yellow]",
+            f"[yellow]LOW is not an all-clear.[/yellow] In validation "
+            f"{result['band_precision']:.0%} of indicators scoring LOW were malicious.\n"
+            "This model flags attacker infrastructure; it cannot clear an indicator.",
+        )
+
     if verbose:
         table.add_row("", "")
-        table.add_row("[dim]Base score[/dim]", f"[dim]{ml_score}[/dim]")
+
+        # The whole chain, because four different numbers reach four different
+        # conclusions and only the last two were ever shown. band_precision
+        # belongs on the model's own score, which is what it was measured on —
+        # not on the blended figure the table reports as "Score".
+        model_score = result.get("model_score")
+        if model_score is not None:
+            band = result.get("band_precision")
+            measured = f"  [dim]{score_to_risk(model_score)} band, {band:.0%} malicious[/dim]" if band else ""
+            table.add_row("[dim]Model score[/dim]", f"[dim]{model_score}[/dim]{measured}")
+
+            # Shown as inputs rather than as a running total. The intermediate
+            # value would mean importing the blenders here, and this module
+            # stays free of them so a front end can render a cached result
+            # without loading the engine. Both can only raise the model score.
+            table.add_row("[dim]Graph score[/dim]", f"[dim]{result.get('graph_score', 0.0)}[/dim]")
+            table.add_row("[dim]Temporal score[/dim]", f"[dim]{result.get('temporal_score', 0.0)}[/dim]")
+            table.add_row("[dim]Blended[/dim]", f"[dim]{ml_score}[/dim]")
+        else:
+            table.add_row("[dim]Base score[/dim]", f"[dim]{ml_score}[/dim]")
+
         delta = round(context_score - ml_score, 4)
         table.add_row("[dim]Context modifier[/dim]", f"[dim]{delta:+} ({infrastructure})[/dim]")
         table.add_row("[dim]Score-derived[/dim]", f"[dim]{score_level(result)}[/dim]")

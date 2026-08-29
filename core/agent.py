@@ -94,6 +94,14 @@ class AgentState(TypedDict):
     risk_thresholds: list
     # The LLM produced no summary. The scores stand; the assessment is missing.
     summary_failed: bool
+    # The model's own output, before graph and temporal blending, with the
+    # measured meaning of its band. Kept separate because band_precision was
+    # measured on this number and not on the blended one, and because the
+    # blending stages are otherwise invisible to anyone reading a result.
+    model_score: float
+    band_precision: float | None
+    graph_score: float
+    temporal_score: float
  
  
 def is_ipv4(value: str) -> bool:
@@ -602,6 +610,9 @@ def apply_context(state: AgentState) -> AgentState:
     raw = scorer.score_any(pivot_result)
     ml_score = raw.get("confidence_score", 0.0)
 
+    state["model_score"] = ml_score
+    state["band_precision"] = raw.get("band_precision")
+
     # The scorers say UNKNOWN when they had nothing, but only confidence_score
     # propagates from here, so that verdict was being dropped. Either way the
     # score below measures our visibility, not the indicator.
@@ -651,6 +662,9 @@ def apply_context(state: AgentState) -> AgentState:
     else:
         blended_score = graph_scorer.blend_scores(ml_score, graph_score)
         blended_score = temporal_scorer.blend_with_ml(blended_score, temporal_score)
+
+    state["graph_score"] = round(graph_score, 4)
+    state["temporal_score"] = round(temporal_score, 4)
 
     context = detect_infrastructure_type(pivot_result)
     modifier = context.get("confidence_modifier", 0.0)
@@ -816,6 +830,10 @@ def run_agent(seed: str, deep: bool = False) -> dict:
         "should_continue": True,
         "ml_score": 0.0,
         "context_score": 0.0,
+        "model_score": 0.0,
+        "band_precision": None,
+        "graph_score": 0.0,
+        "temporal_score": 0.0,
         "infrastructure_type": "unknown",
         "context_note": "",
         "summary": "",
@@ -854,6 +872,10 @@ def run_agent(seed: str, deep: bool = False) -> dict:
         "pivot_count": final_state["pivot_count"],
         "ml_score": final_state["ml_score"],
         "context_score": final_state["context_score"],
+        "model_score": final_state.get("model_score", 0.0),
+        "band_precision": final_state.get("band_precision"),
+        "graph_score": final_state.get("graph_score", 0.0),
+        "temporal_score": final_state.get("temporal_score", 0.0),
         "infrastructure_type": final_state["infrastructure_type"],
         "indicator_type": final_state["indicator_type"],
         "relevance_level": final_state["relevance_level"],
