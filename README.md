@@ -26,7 +26,7 @@ Built for people without a commercial threat intel platform: solo analysts, smal
 - **Scores what it finds**, using a model suited to the indicator type, adjusted for how things connect to each other and how recently they were seen. Shared infrastructure like CDNs and Tor exits gets marked down, since plenty of innocent traffic lives there
 - **Says "I don't know" when it doesn't.** If no source has ever seen an indicator, you get `UNKNOWN`, not `LOW`. A lookup that failed is never quietly reported as a clean result
 - **Won't get bystanders blocked.** When you export findings to share, it holds back addresses that host innocent sites alongside the bad one, and writes down what it held back and why
-- **Gives the same answer twice.** Findings come straight from what the sources returned, so two runs on the same data agree. The only AI-written part is the closing summary
+- **Doesn't invent anything.** The findings are copied out of what each source actually returned, not generated, so the tool adds no guesswork of its own. Run the same indicator next week and the numbers may differ, but that is because the sources changed, not because the tool changed its mind. Only the closing summary is AI-written
 
 ---
 
