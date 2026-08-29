@@ -145,7 +145,16 @@ def build_metrics_table(result: dict, verbose: bool = False) -> Table:
         model_score = result.get("model_score")
         if model_score is not None:
             band = result.get("band_precision")
-            measured = f"  [dim]{score_to_risk(model_score)} band, {band:.0%} malicious[/dim]" if band else ""
+            base = result.get("band_base_rate")
+            # Lift against the base rate, because a band precision alone is not
+            # readable. The two models were measured on sets with different
+            # priors, so 94% on the IP model is weaker evidence than 89% on the
+            # domain one, and only the multiple shows it.
+            lift = f", {band / base:.2f}x base rate" if band and base else ""
+            measured = (
+                f"  [dim]{score_to_risk(model_score)} band: {band:.0%} malicious{lift}[/dim]"
+                if band else ""
+            )
             table.add_row("[dim]Model score[/dim]", f"[dim]{model_score}[/dim]{measured}")
 
             # Shown as inputs rather than as a running total. The intermediate

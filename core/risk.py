@@ -46,6 +46,27 @@ DEFAULT_THRESHOLDS = (0.7, 0.4)
 # model's discrimination, not as a population probability.
 DOMAIN_BAND_PRECISION = {"HIGH": 0.89, "MEDIUM": 0.43, "LOW": 0.20}
 
+# The same measurement for the IP model, on data/training_data.csv. Read the
+# base rates before comparing the two: that set is 74.3% malicious against the
+# domain set's 50.4%, so every IP band starts higher for reasons that have
+# nothing to do with the model. As lift over its own prior the IP model is the
+# weaker of the two — HIGH is 1.26x its base rate where the domain model's is
+# 1.77x.
+#
+# MEDIUM is worth reading as uncertainty rather than as moderate risk. It sits
+# below the prior in both models, 0.95x for IP and 0.85x for domain, so an
+# indicator landing there is slightly less likely to be malicious than one drawn
+# at random from the same set. The band marks where the model has nothing to
+# say, not where risk is middling.
+#
+# The IP figures are also weaker evidence than the domain ones. That dataset was
+# never re-collected against an ordinary-business benign class, so its benign
+# side still carries the Tor exits and resolved household-name domains that made
+# the first domain model unusable.
+IP_BAND_PRECISION = {"HIGH": 0.94, "MEDIUM": 0.71, "LOW": 0.29}
+
+BASE_RATES = {"domain": 0.504, "ip": 0.743}
+
 
 def score_to_risk(score: float, thresholds: tuple = DEFAULT_THRESHOLDS) -> str:
     """Maps a score to HIGH / MEDIUM / LOW against the given thresholds."""

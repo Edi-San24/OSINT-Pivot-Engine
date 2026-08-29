@@ -122,15 +122,22 @@ The domain model reads **infrastructure shape** — registration age, nameserver
 
 **5-fold ROC-AUC 0.878 ± 0.037** on 383 labelled domains. `confidence_score` **ranks, it does not calibrate** — `0.67` is not "67% likely malicious". Rather than dress it up, each domain score carries `band_precision`: what its band was measured to mean out-of-fold across eight resampled splits.
 
-| band | measured malicious rate | read it as |
-|---|---|---|
-| HIGH `≥ 0.7` | **89%** ± 0.8 | trustworthy; act on it |
-| MEDIUM `0.4–0.7` | **43%** ± 5.9 | a coin flip; needs a human |
-| LOW `< 0.4` | **20%** ± 1.0 | **not an all-clear** |
+| band | domain model | IP model | read it as |
+|---|---|---|---|
+| HIGH `≥ 0.7` | **89%** (1.77x) | **94%** (1.27x) | trustworthy; act on it |
+| MEDIUM `0.4–0.7` | **43%** (0.85x) | **71%** (0.95x) | the model is *uncertain* |
+| LOW `< 0.4` | **20%** (0.40x) | **29%** (0.38x) | **not an all-clear** |
+| base rate | 50.4% malicious | 74.3% malicious | |
 
-**LOW is the one to read carefully.** One in five indicators scored LOW is malicious, and no threshold repairs it — even below `0.10` the rate is still 16%. This model can say something looks like attacker infrastructure; it cannot clear anything. Post-hoc calibration was tried and rejected: Platt scaling made expected calibration error *worse* (0.057 → 0.079) and isotonic bought 0.007 at the cost of AUC. At 383 rows both fit noise, so reporting the measured rate is the honest option.
+**Read the lift, not the percentage.** The two models were measured on sets with different priors, so the IP model's 94% is *weaker* evidence than the domain model's 89% — 1.27x its base rate against 1.77x. Both numbers travel with their base rate in the output for exactly this reason.
 
-Rates are conditional on a near 50/50 training distribution, so treat them as the model's discrimination, not a population probability.
+**MEDIUM means uncertainty, not moderate risk.** It sits *below* the prior in both models, so an indicator landing there is slightly less likely to be malicious than one drawn at random from the same set.
+
+**LOW is not an all-clear**, and the CLI and TUI say so on every LOW result. One in five domains scoring LOW is malicious and no threshold repairs it — even below `0.10` the rate is still 16%. These models flag attacker infrastructure; they cannot clear an indicator.
+
+Post-hoc calibration was tried and rejected: Platt scaling made expected calibration error *worse* (0.057 → 0.079) and isotonic bought 0.007 at the cost of AUC. At 383 rows both fit noise, so reporting the measured rate beats a transformed number that looks more precise than the data supports.
+
+The IP figures are weaker evidence than the domain ones — that dataset was never re-collected against an ordinary-business benign class, so its benign side still carries the Tor exits and resolved household-name domains that made the first domain model unusable.
 
 Two known blind spots, both pinned in the test suite:
 

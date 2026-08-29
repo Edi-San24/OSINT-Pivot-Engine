@@ -25,7 +25,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.graph_scorer import GraphScorer
-from core.risk import DOMAIN_BAND_PRECISION
+from core.risk import BASE_RATES, DOMAIN_BAND_PRECISION, IP_BAND_PRECISION
 from core.temporal_scorer import TemporalScorer
 from core.scorer import ConfidenceScorer
 
@@ -143,6 +143,22 @@ def main() -> int:
           f"LOW still documented as non-clearing ({DOMAIN_BAND_PRECISION['LOW']:.0%} malicious)")
     check(DOMAIN_BAND_PRECISION["HIGH"] > DOMAIN_BAND_PRECISION["MEDIUM"] > DOMAIN_BAND_PRECISION["LOW"],
           "band precisions are ordered HIGH > MEDIUM > LOW")
+
+    # IP scores carry their own bands, measured on a set with a different prior.
+    # The base rate travels with them because a precision without it is not
+    # readable: 94% on the IP model is weaker evidence than 89% on the domain
+    # model, and only lift over the prior shows that.
+    for indicator, entry in entries.items():
+        if entry.get("type") != "ipv4" or indicator not in scores:
+            continue
+        result = scores[indicator]
+        check(result.get("band_precision") == IP_BAND_PRECISION.get(result.get("risk_level")),
+              f"{indicator[:30]:30} {result.get('risk_level'):6} carries {result.get('band_precision')}")
+        check(result.get("band_base_rate") == BASE_RATES["ip"],
+              f"{indicator[:30]:30} carries its base rate {result.get('band_base_rate')}")
+
+    check(IP_BAND_PRECISION["HIGH"] / BASE_RATES["ip"] < DOMAIN_BAND_PRECISION["HIGH"] / BASE_RATES["domain"],
+          "IP HIGH is weaker lift than domain HIGH despite the larger percentage")
 
     # The suite previously scored only through ConfidenceScorer, so the blending
     # layers were never exercised and a bug there went unseen for as long as it
