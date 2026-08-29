@@ -24,6 +24,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core.risk import DOMAIN_BAND_PRECISION
 from core.scorer import ConfidenceScorer
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "reality_check.json")
@@ -123,6 +124,23 @@ def main() -> int:
         drift = abs(actual - expected)
         check(drift <= DRIFT_TOLERANCE,
               f"{indicator[:34]:34} {actual:.3f} vs {expected:.3f} baseline (drift {drift:.3f})")
+
+    print("\n-- domain scores carry the measured meaning of their band --")
+    for indicator, entry in entries.items():
+        if entry.get("type") != "domain" or indicator not in scores:
+            continue
+        result = scores[indicator]
+        expected = DOMAIN_BAND_PRECISION.get(result.get("risk_level"))
+        check(result.get("band_precision") == expected,
+              f"{indicator[:30]:30} {result.get('risk_level'):6} carries {result.get('band_precision')}")
+
+    # Guards the semantics rather than the number. If a retrain ever makes LOW
+    # mean "clear", that is a claim this model has never been able to support —
+    # one in five LOW indicators is malicious and no threshold repairs it.
+    check(DOMAIN_BAND_PRECISION["LOW"] >= 0.10,
+          f"LOW still documented as non-clearing ({DOMAIN_BAND_PRECISION['LOW']:.0%} malicious)")
+    check(DOMAIN_BAND_PRECISION["HIGH"] > DOMAIN_BAND_PRECISION["MEDIUM"] > DOMAIN_BAND_PRECISION["LOW"],
+          "band precisions are ordered HIGH > MEDIUM > LOW")
 
     print("\n-- known limitations (recorded, not asserted) --")
     for indicator, reason in KNOWN_LIMITATIONS.items():

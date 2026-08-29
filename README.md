@@ -120,11 +120,22 @@ Infrastructure indicators are scored by a gradient-boosting model; threat groups
 
 The domain model reads **infrastructure shape** — registration age, nameserver count, MX presence, wildcard zones, DNS record count. It deliberately excludes the VirusTotal columns, which are three views of one number and alone score AUC 0.96: a model leaning on them cannot say anything VirusTotal hasn't already said, and inherits its blind spots.
 
-**5-fold ROC-AUC 0.878 ± 0.037** on 383 labelled domains. Known limits, all pinned in the test suite:
+**5-fold ROC-AUC 0.878 ± 0.037** on 383 labelled domains. `confidence_score` **ranks, it does not calibrate** — `0.67` is not "67% likely malicious". Rather than dress it up, each domain score carries `band_precision`: what its band was measured to mean out-of-fold across eight resampled splits.
+
+| band | measured malicious rate | read it as |
+|---|---|---|
+| HIGH `≥ 0.7` | **89%** ± 0.8 | trustworthy; act on it |
+| MEDIUM `0.4–0.7` | **43%** ± 5.9 | a coin flip; needs a human |
+| LOW `< 0.4` | **20%** ± 1.0 | **not an all-clear** |
+
+**LOW is the one to read carefully.** One in five indicators scored LOW is malicious, and no threshold repairs it — even below `0.10` the rate is still 16%. This model can say something looks like attacker infrastructure; it cannot clear anything. Post-hoc calibration was tried and rejected: Platt scaling made expected calibration error *worse* (0.057 → 0.079) and isotonic bought 0.007 at the cost of AUC. At 383 rows both fit noise, so reporting the measured rate is the honest option.
+
+Rates are conditional on a near 50/50 training distribution, so treat them as the model's discrimination, not a population probability.
+
+Two known blind spots, both pinned in the test suite:
 
 - **Compromised legitimate sites are missed.** Their infrastructure is genuinely benign; the maliciousness is in served content, which no feature observes.
 - **Bulk hosting is over-flagged**, for the mirror-image reason — attackers rent bulk hosting.
-- **`confidence_score` is not calibrated.** It ranks; `0.67` does not mean "67% likely malicious".
 
 ---
 

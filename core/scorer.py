@@ -13,7 +13,7 @@ from core.features import extract_features
 # other silently disagreeing — the front end and the scorer already diverged
 # that way once, calling the same 0.55 group HIGH on one side and MEDIUM on
 # the other.
-from core.risk import DEFAULT_THRESHOLDS, score_to_risk
+from core.risk import DEFAULT_THRESHOLDS, DOMAIN_BAND_PRECISION, score_to_risk
 from config import MODEL_DIR
 
 logging.basicConfig(level=logging.ERROR)
@@ -126,11 +126,18 @@ class ConfidenceScorer:
         confidence_score = gb.predict_proba(matrix(gb))[0][1]
         is_anomaly = iso.predict(matrix(iso))[0] == -1
 
+        fields = self._risk_fields(confidence_score)
+        if use_domain:
+            # The measured meaning of this band, so the score reads as the
+            # model's discrimination rather than as a probability. It is not
+            # calibrated: 0.67 does not mean a 67% chance of being malicious.
+            fields["band_precision"] = DOMAIN_BAND_PRECISION.get(fields["risk_level"])
+
         return {
             "confidence_score": round(float(confidence_score), 4),
             "is_anomaly": is_anomaly,
             "model": f"domain_{DOMAIN_MODEL_TAG}" if use_domain else "ip",
-            **self._risk_fields(confidence_score),
+            **fields,
             "features_used": features,
         }
  

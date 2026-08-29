@@ -26,6 +26,26 @@ SCORER_AUTHORITATIVE_TYPES = {"threat_group", "software"}
 # scorer started reporting them, and the ML path's own default.
 DEFAULT_THRESHOLDS = (0.7, 0.4)
 
+# What each band was measured to mean for the domain model, out-of-fold across
+# eight resampled 5-fold splits of the published training set: HIGH 88.9% +/-
+# 0.8, MEDIUM 42.9% +/- 5.9, LOW 20.1% +/- 1.0 actually malicious.
+#
+# LOW is the one to read carefully. One in five indicators scored LOW is
+# malicious, and no threshold repairs that — even below 0.10 the rate is still
+# 16%. The model can say an indicator looks like attacker infrastructure; it
+# cannot clear one. LOW means "nothing elevated in the infrastructure", not
+# "safe", and the label should never be read as an all-clear.
+#
+# Post-hoc calibration was tried and rejected. Platt scaling made expected
+# calibration error worse (0.057 to 0.079) and isotonic bought 0.007 at the cost
+# of AUC; at 383 rows both are fitting noise. Reporting the measured rate is
+# honest where a transformed probability would not be.
+#
+# These rates are conditional on a near 50/50 training distribution. The base
+# rate of domains an analyst actually investigates differs, so read them as the
+# model's discrimination, not as a population probability.
+DOMAIN_BAND_PRECISION = {"HIGH": 0.89, "MEDIUM": 0.43, "LOW": 0.20}
+
 
 def score_to_risk(score: float, thresholds: tuple = DEFAULT_THRESHOLDS) -> str:
     """Maps a score to HIGH / MEDIUM / LOW against the given thresholds."""
