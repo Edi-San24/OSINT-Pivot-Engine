@@ -247,6 +247,48 @@ def _last_seen_within(record: dict, days: int) -> bool:
     return (time.time() - stamp) <= days * 86400
 
 
+
+# Cache so one export does not re-query the same neighbour repeatedly.
+_TENANT_VERDICTS: dict[str, bool] = {}
+
+
+def _is_known_malicious(domain: str) -> bool:
+    """
+    Whether a co-resolving neighbour is itself listed as malicious.
+
+    Bystander protection exists for uninvolved third parties, and a neighbour
+    that the feeds already flag is not one. cnc-server.com sharing an address
+    with a Mirai distribution host was counted as a bystander and suppressed
+    publication of the attacker-owned IP entirely.
+
+    Fails open on purpose. Any error, missing key or unreachable feed returns
+    False, which keeps the neighbour protected. Only positive evidence of
+    maliciousness removes that protection, because the cost of wrongly stripping
+    it is a real business on somebody's blocklist.
+    """
+    key = domain.strip().lower()
+    if key in _TENANT_VERDICTS:
+        return _TENANT_VERDICTS[key]
+
+    verdict = False
+    try:
+        from connectors.threatfox import ThreatFoxConnector
+        from connectors.urlhaus import URLhausConnector
+
+        tf = ThreatFoxConnector().query_indicator(key, "domain")
+        if tf.get("found"):
+            verdict = True
+        else:
+            uh = URLhausConnector().query_host(key)
+            verdict = bool(uh.get("found"))
+    except Exception as e:
+        logger.warning(f"Could not check neighbour {key}: {str(e)[:80]}")
+        verdict = False
+
+    _TENANT_VERDICTS[key] = verdict
+    return verdict
+
+
 def _co_hosted_tenants(pivot: dict, investigated_domains: set[str]) -> list[str] | None:
     """
     Domains on this IP that belong to somebody else.
@@ -280,7 +322,11 @@ def _co_hosted_tenants(pivot: dict, investigated_domains: set[str]) -> list[str]
         # between 2019 and 2025.
         if _last_seen_within(record, TENANCY_WINDOW_DAYS):
             tenants.append(value)
-    return sorted(set(tenants))
+
+    # Neighbours the feeds already flag are not bystanders, so they do not earn
+    # protection and must not suppress publication of the address.
+    protected = [t for t in sorted(set(tenants)) if not _is_known_malicious(t)]
+    return protected
 
 
 def _engine_artifacts(investigation: dict) -> set[str]:
@@ -312,20 +358,24 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
     Only indicators the agent actually investigated are eligible — a passive
     DNS neighbour was never assessed and has no place in a pulse.
     """
-    investigated: list[tuple[str, dict]] = []
+    # Both forms are carried: the lowercased key matches and deduplicates, the
+    # original is what gets published. URL paths are case-sensitive, so
+    # publishing the folded form emitted http://host/okami.x86 for a payload
+    # actually served at /Okami.x86 — an indicator that cannot match anything.
+    investigated: list[tuple[str, str, dict]] = []
     for investigation in investigations:
         for name in investigation.get("visited", []):
-            investigated.append((name.strip().lower(), investigation))
+            investigated.append((name.strip().lower(), name.strip(), investigation))
 
     domains = {
-        n for n, _ in investigated
+        n for n, _, _ in investigated
         if not n.replace(".", "").isdigit() and "." in n
     }
 
     included, excluded = [], []
     seen = set()
 
-    for name, investigation in investigated:
+    for name, original, investigation in investigated:
         if name in seen:
             continue
         seen.add(name)
@@ -368,7 +418,7 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
         others = domains - {name}
         resolved = "hostname" if (itype == "domain" and _is_under(name, others)) else itype
         included.append({
-            "indicator": name,
+            "indicator": original,
             "type": OTX_TYPES.get(resolved, resolved),
             "engine_risk_level": investigation.get("risk_level", "unknown"),
         })
