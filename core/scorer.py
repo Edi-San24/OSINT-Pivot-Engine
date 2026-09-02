@@ -140,6 +140,34 @@ class ConfidenceScorer:
         confidence_score = gb.predict_proba(matrix(gb))[0][1]
         is_anomaly = iso.predict(matrix(iso))[0] == -1
 
+        # Feed evidence floors the model, because the model is structurally
+        # blind to a compromised legitimate site: registered years ago, real
+        # mail, stable DNS, and malicious only in what it serves. The feeds
+        # answer exactly that question and the engine already queries them.
+        #
+        # raspberryhillsshop.com is why this is not left to the agent.
+        # ThreatFox rated it ClearFake at confidence 100 and the model scored it
+        # 0.1394. On one run the agent overrode to HIGH; on the next it emitted
+        # no THREAT LEVEL line at all, so the score stood unopposed and a listed
+        # ClearFake domain resolved LOW. The safety net cannot be a model that
+        # sometimes declines to answer.
+        #
+        # A floor rather than a blend, matching the graph and temporal layers.
+        # Positive evidence only raises: a benign domain has no listing, so the
+        # floor is zero and nothing moves. Measured across the evaluation set,
+        # the three compromised sites floor to HIGH and every benign domain is
+        # untouched.
+        evidence = self.score_from_evidence(pivot_result)
+        floor = evidence.get("confidence_score") or 0.0
+        if floor > confidence_score:
+            evidence["model_score"] = round(float(confidence_score), 4)
+            evidence["note"] = (
+                f"Feed evidence overrode the model, which scored "
+                f"{confidence_score:.4f} on infrastructure alone. "
+                + evidence.get("note", "")
+            )
+            return evidence
+
         # The measured meaning of the band, so the score reads as the model's
         # discrimination rather than as a probability. It is not calibrated:
         # 0.67 does not mean a 67% chance of being malicious, and the base rate

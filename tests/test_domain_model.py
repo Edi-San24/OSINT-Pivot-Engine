@@ -182,6 +182,35 @@ def main() -> int:
     # 0.7507 HIGH because it is indistinguishable from a domain registered
     # today. Reserved space cannot host anything, so "checked, nothing found"
     # misdescribes it.
+    # The model cannot see a compromised legitimate site, and the agent is not a
+    # reliable backstop: on one run it overrode raspberryhillsshop.com to HIGH
+    # and on the next it emitted no THREAT LEVEL line, so a ThreatFox
+    # confidence-100 ClearFake domain resolved LOW on a 0.1394 score.
+    print("\n-- feed evidence floors the model, and only upward --")
+    listed = scorer.score_any({
+        "indicator": "compromised.example", "type": "domain",
+        "results": {"whois": {"creation_date": "2019-04-15"},
+                    "dns": {"a": ["1.2.3.4"], "nameservers": ["a.ns", "b.ns"], "mx": ["mail"]},
+                    "threatfox": {"found": True, "max_confidence": 100},
+                    "urlhaus": {"found": False},
+                    "virustotal": {"malicious_votes": 2, "harmless_votes": 53},
+                    "otx": {"pulse_count": 0}},
+    })
+    check(listed.get("risk_level") == "HIGH",
+          f"a confidence-100 listing floors a benign-looking domain to HIGH "
+          f"(model said {listed.get('model_score')}, result {listed.get('confidence_score')})")
+
+    unlisted = scorer.score_any({
+        "indicator": "ordinary.example", "type": "domain",
+        "results": {"whois": {"creation_date": "2015-01-01"},
+                    "dns": {"a": ["1.2.3.4"], "nameservers": ["a.ns", "b.ns"], "mx": ["mail"]},
+                    "threatfox": {"found": False}, "urlhaus": {"found": False},
+                    "virustotal": {"malicious_votes": 0, "harmless_votes": 60},
+                    "otx": {"pulse_count": 0}},
+    })
+    check("model_score" not in unlisted,
+          "an unlisted domain is left to the model, with no floor applied")
+
     print("\n-- absence is reported as absence, not as a verdict --")
     nothing = scorer.score_any({
         "indicator": "does-not-exist-abc987xyz.example", "type": "domain",
