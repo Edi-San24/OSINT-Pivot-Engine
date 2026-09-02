@@ -27,6 +27,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core.detector import detect_type
+from core.executor import PivotExecutor
 from core.graph_scorer import GraphScorer
 from core.risk import (
     DOMAIN_BAND_PRECISION,
@@ -84,6 +86,47 @@ def check(condition: bool, description: str) -> None:
     print(f"  {'PASS' if condition else 'FAIL'}  {description}")
     if not condition:
         failures.append(description)
+
+
+def check_seed_formats() -> None:
+    """
+    A seed the analyst can actually paste has to resolve to a type.
+
+    ThreatFox publishes C2s as host:port and its browse page is the documented
+    place to get fresh seeds, but neither the ipv4 nor the domain pattern
+    accepted a port. 217.60.102.3:56003 detected as nothing, so the executor
+    refused it, no source was ever asked, and the verdict came back UNKNOWN on
+    an address ThreatFox held at confidence 75 as PureRAT. The connectors want
+    the host, so the detector returns the host and the executor uses it.
+    """
+    print("\n-- a pasteable seed resolves to a type --")
+
+    cases = [
+        # seed,                        type,     indicator connectors receive
+        ("217.60.102.3:56003",         "ipv4",   "217.60.102.3"),
+        ("evil.example.com:443",       "domain", "evil.example.com"),
+        ("217.60.102.3",               "ipv4",   "217.60.102.3"),
+        ("http://217.60.102.3:56003",  "url",    "http://217.60.102.3:56003"),
+    ]
+    for seed, expected_type, expected_indicator in cases:
+        got = detect_type(seed) or {}
+        check(
+            got.get("type") == expected_type
+            and got.get("indicator") == expected_indicator,
+            f"{seed[:30]:30} -> {got.get('type')} on {got.get('indicator')}",
+        )
+
+    # A port that cannot exist, and a host that is neither an address nor a
+    # domain. Accepting these would route junk into a pivot.
+    for junk in ["1.2.3.4:0", "1.2.3.4:99999", "1.2.3.4:abc", "notahost:443"]:
+        check(detect_type(junk) is None, f"{junk[:30]:30} -> rejected")
+
+    # The executor has to pass on the detector's indicator, not the raw seed.
+    validated = PivotExecutor().validate("217.60.102.3:56003")
+    check(validated.get("valid") and validated.get("indicator") == "217.60.102.3",
+          f"executor validates host:port to {validated.get('indicator')}")
+    check(validated.get("port") == 56003,
+          f"the port survives for the report: {validated.get('port')}")
 
 
 def check_verdict_is_deterministic(scorer: ConfidenceScorer) -> None:
@@ -181,6 +224,7 @@ def main() -> int:
     # Before the model gate on purpose: none of this needs a model, and the
     # verdict has to be reproducible on a fresh clone too.
     check_verdict_is_deterministic(scorer)
+    check_seed_formats()
 
     if scorer.domain_gb is None:
         # Domain models are gitignored, so a fresh clone has none until it

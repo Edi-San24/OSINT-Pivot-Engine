@@ -163,7 +163,11 @@ class PivotExecutor:
             return {"valid": False, "reason": "Could not detect indicator type."}
         if result["type"] not in ALLOWED_TYPES:
             return {"valid": False, "reason": f"Unknown indicator type: {result['type']}"}
-        return {"valid": True, "indicator": seed, "type": result["type"]}
+        # The detector's indicator, not the raw seed. Identical for every type
+        # except a host:port C2, where it is the host and the seed is what no
+        # connector can query.
+        return {"valid": True, "indicator": result["indicator"],
+                "type": result["type"], "port": result.get("port")}
  
     def pivot_ip(self, ip: str, deep: bool = False) -> dict:
         """

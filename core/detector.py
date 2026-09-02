@@ -120,6 +120,12 @@ ACTOR_DESIGNATOR = re.compile(
 
 _WHITESPACE = re.compile(r"\s")
 
+# ThreatFox publishes C2s as host:port, and that is what a copy from its browse
+# page pastes. Neither the ipv4 nor the domain pattern accepts a port, so the
+# seed matched nothing, the pivot never ran, and the verdict read UNKNOWN on an
+# address ThreatFox held at confidence 75 as PureRAT.
+HOST_PORT = re.compile(r"^(?P<host>[^\s:/]+):(?P<port>\d{1,5})$")
+
 # Second-level public suffixes, so stripping a hostname to its registrable
 # domain stops before it returns a public suffix. Not a full PSL — the common
 # ccTLD structures, which is what shows up in practice.
@@ -201,6 +207,34 @@ def _detected(seed: str, indicator_type: str, confidence: str) -> dict:
     return {"indicator": seed, "type": indicator_type, "confidence": confidence}
 
 
+def _host_port(seed: str) -> dict | None:
+    """
+    Splits a host:port C2 down to its host, which is what connectors query.
+
+    'indicator' is the host rather than the seed, so callers must use it rather
+    than the string they passed in. 'port' is carried for the report; nothing
+    scores on it.
+    """
+    match = HOST_PORT.match(seed)
+    if not match:
+        return None
+
+    port = int(match.group("port"))
+    if not 1 <= port <= 65535:
+        return None
+
+    host = match.group("host")
+    for indicator_type in ("ipv4", "domain"):
+        if PATTERNS[indicator_type].match(host):
+            return {
+                "indicator": host,
+                "type": indicator_type,
+                "confidence": "high",
+                "port": port,
+            }
+    return None
+
+
 def detect_type(seed: str) -> dict | None:
     """
     Accepts a seed indicator string.
@@ -231,6 +265,12 @@ def detect_type(seed: str) -> dict | None:
         if PATTERNS[indicator_type].match(seed):
             confidence = "low" if indicator_type == "username" else "high"
             return _detected(seed, indicator_type, confidence)
+
+    # After the loop on purpose, so a scheme-prefixed URL keeps the url type
+    # and only a bare host:port reaches this.
+    host_port = _host_port(seed)
+    if host_port:
+        return host_port
 
     # Whitespace rules out a username, so this is an actor name we have not seen
     # before — what the group pivot's OTX fallback exists for. This returned None
