@@ -28,6 +28,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.detector import detect_type
+from core.agent import extract_findings
 from core.executor import PivotExecutor
 from core.graph_scorer import GraphScorer
 from core.risk import (
@@ -127,6 +128,30 @@ def check_seed_formats() -> None:
           f"executor validates host:port to {validated.get('indicator')}")
     check(validated.get("port") == 56003,
           f"the port survives for the report: {validated.get('port')}")
+
+    # The seed named a service and the pivot is on the host, so the port only
+    # reaches the analyst if extract_findings carries it.
+    seed_port = {"source": "seed_port", "port": 56003, "non_standard_port": True}
+
+    def port_finding(results: dict) -> str:
+        hits = [f for f in extract_findings(
+            {"indicator": "217.60.102.3", "type": "ipv4", "results": results}
+        ) if "on port 56003" in f]
+        return hits[0] if hits else ""
+
+    confirmed = port_finding({"seed_port": seed_port,
+                              "shodan": {"open_ports": [22, 56003]}})
+    check("confirmed open" in confirmed, f"scan lists it -> {confirmed[-38:]}")
+
+    absent = port_finding({"seed_port": seed_port,
+                           "shodan": {"open_ports": [22, 80]}})
+    check("does not list" in absent, f"scan ran without it -> {absent[-38:]}")
+
+    # The one that matters. A source that failed says nothing about the port,
+    # and writing that up as closed would retire a live C2 on silence.
+    silent = port_finding({"seed_port": seed_port, "shodan": {"error": "401"}})
+    check("no scan data came back" in silent,
+          f"no scan data is not a closed port -> {silent[-38:]}")
 
 
 def check_verdict_is_deterministic(scorer: ConfidenceScorer) -> None:

@@ -125,6 +125,24 @@ def _run_parallel(tasks: dict, timeout: int = None) -> dict:
     return results
  
  
+def _record_seed_port(results: dict, port: int) -> None:
+    """
+    Keeps the port from a host:port seed, which the pivot itself drops.
+
+    ThreatFox names a C2 as host:port and the connectors can only be asked
+    about the host, so without this the report never says which service was
+    reported. Recorded like url_parts: context for the write-up, and nothing
+    scores on it.
+    """
+    if not port:
+        return
+    results["seed_port"] = {
+        "source": "seed_port",
+        "port": port,
+        "non_standard_port": port not in (80, 443),
+    }
+
+
 class PivotExecutor:
     """
     Routes seed indicators to the correct connectors and
@@ -169,7 +187,7 @@ class PivotExecutor:
         return {"valid": True, "indicator": result["indicator"],
                 "type": result["type"], "port": result.get("port")}
  
-    def pivot_ip(self, ip: str, deep: bool = False) -> dict:
+    def pivot_ip(self, ip: str, deep: bool = False, port: int = None) -> dict:
         """
         Queries all relevant connectors for an IP address indicator.
         Connectors run in parallel. SpiderFoot only runs when deep=True.
@@ -195,9 +213,11 @@ class PivotExecutor:
             tasks["dnsdb"] = lambda: self.dnsdb.query_ip(ip)
 
         results = _run_parallel(tasks)
+        _record_seed_port(results, port)
+
         return {"indicator": ip, "type": "ipv4", "results": results}
  
-    def pivot_domain(self, domain: str, deep: bool = False) -> dict:
+    def pivot_domain(self, domain: str, deep: bool = False, port: int = None) -> dict:
         """
         Queries all relevant connectors for a domain indicator.
         Connectors run in parallel. SpiderFoot only runs when deep=True.
@@ -230,6 +250,8 @@ class PivotExecutor:
             tasks["dnsdb"] = lambda: self.dnsdb.query_domain(domain)
 
         results = _run_parallel(tasks)
+        _record_seed_port(results, port)
+
         return {"indicator": domain, "type": "domain", "results": results}
  
     def _registration(self, domain: str) -> dict:
@@ -527,11 +549,12 @@ class PivotExecutor:
  
         indicator = validation["indicator"]
         indicator_type = validation["type"]
+        port = validation.get("port")
  
         if indicator_type == "ipv4":
-            return self.pivot_ip(indicator, deep=deep)
+            return self.pivot_ip(indicator, deep=deep, port=port)
         elif indicator_type == "domain":
-            return self.pivot_domain(indicator, deep=deep)
+            return self.pivot_domain(indicator, deep=deep, port=port)
         elif indicator_type == "url":
             return self.pivot_url(indicator, deep=deep)
         elif indicator_type in {"md5", "sha1", "sha256"}:

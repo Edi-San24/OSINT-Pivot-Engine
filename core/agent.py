@@ -315,6 +315,32 @@ def extract_findings(result: dict) -> list[str]:
     if shodan.get("organization"):
         findings.append(f"{indicator}: hosted by {shodan['organization']}.")
 
+    # The port from a host:port seed. The pivot is on the host, so this is the
+    # only place the reported service survives.
+    #
+    # Corroborated against the scan only when the scan actually returned ports.
+    # An errored or empty Shodan saying nothing about a port is not the port
+    # being closed, and writing it that way would retire a live C2 on silence.
+    seed_port = results.get("seed_port") or {}
+    if seed_port.get("port"):
+        port = seed_port["port"]
+        odd = " (non-standard)" if seed_port.get("non_standard_port") else ""
+        if not ports:
+            corroboration = (
+                ", and no scan data came back to say whether it is open"
+            )
+        elif port in ports:
+            corroboration = ", confirmed open by the scan above"
+        else:
+            corroboration = (
+                f", which the scan above does not list among the {len(ports)} "
+                f"open ports it saw"
+            )
+        findings.append(
+            f"{indicator}: reported as a service on port {port}{odd}"
+            f"{corroboration}."
+        )
+
     country = censys.get("country", "")
     if country and country != "unknown":
         findings.append(f"{indicator}: geolocated to {country}.")
