@@ -127,19 +127,23 @@ You get two files. Upload `pulse.json`; keep `pulse.audit.json` for yourself. Th
 
 Every investigation ends with a score and a HIGH / MEDIUM / LOW label. Here is what those actually mean, measured rather than asserted.
 
-| label | domain | IP | what to do |
-|---|---|---|---|
-| **HIGH** | 89% were malicious | 94% | Act on it. |
-| **MEDIUM** | 43% | 71% | The tool is unsure. Look yourself. |
-| **LOW** | 20% | 29% | Nothing alarming found. **Not the same as safe.** |
+**Domains** are scored by a model, and each band has a measured meaning:
 
-Read those as "out of every 100 domains this tool called HIGH, 89 really were malicious."
+| label | domains | what to do |
+|---|---|---|
+| **HIGH** | 89% were malicious | Act on it. |
+| **MEDIUM** | 43% | The tool is unsure. Look yourself. |
+| **LOW** | 20% | Nothing alarming found. **Not the same as safe.** |
+
+Read that as "out of every 100 domains this tool called HIGH, 89 really were malicious."
+
+**Addresses, hashes, threat groups and malware families** are scored from evidence instead, not by a model. The score tells you how much corroboration exists and from where, and the output names which sources answered. A source with nothing to report leaves the score alone rather than voting the indicator innocent.
 
 **LOW does not mean clean.** One in five domains it scores LOW turns out to be malicious. The tool is good at spotting infrastructure that looks like an attacker built it, and bad at proving something is fine. So a LOW result means "nothing here stood out", not "this is safe to ignore." The CLI and TUI print that warning on every LOW result rather than leaving you to guess.
 
 **MEDIUM means the tool is confused**, not that risk is moderate. Something landing in MEDIUM is no more likely to be malicious than an indicator picked at random. Treat it as "no useful opinion" and use your own judgement.
 
-**Don't compare the two columns directly.** The IP number looks better than the domain one but is actually weaker, because the IP model was tested against a pool that was mostly malicious to begin with. Getting 94% right there is less impressive than 89% on an evenly split pool. The output includes that background rate next to every score so you can tell the difference.
+**There is no model for IP addresses, on purpose.** There was one, and it was retired after it turned out to be measuring the wrong thing entirely. See the technical detail below if you want the post-mortem.
 
 ### Two things it reliably gets wrong
 
@@ -152,15 +156,21 @@ Both are pinned in the test suite so a future change cannot quietly make them wo
 <details>
 <summary>The technical detail, if you want it</summary>
 
-Infrastructure indicators go through a gradient-boosting model. Threat groups, malware families, hashes and identities are scored directly from evidence instead (ATT&CK coverage, sample volume, detection counts).
+Domains go through a gradient-boosting model. Everything else is scored directly from evidence: ATT&CK coverage for threat groups, sample volume for malware families, detection counts and catalogue presence for hashes, and feed corroboration for addresses.
+
+Evidence scores combine by noisy-OR rather than by averaging, so each source can only raise confidence. Averaging was tried and it penalised silence: URLhaus answering "not found" about a command-and-control address dragged a confidence-100 ThreatFox listing down to MEDIUM, even though URLhaus tracks malware URLs and has no reason to know about a C2.
 
 The domain model reads registration age, nameserver count, MX presence, wildcard zones and DNS record count. It deliberately excludes the VirusTotal columns. Those are three views of one number, and on their own they score AUC 0.96, so a model leaning on them just repeats what VirusTotal already told you and inherits its blind spots too.
 
-5-fold ROC-AUC is 0.878 ± 0.037 on 383 labelled domains, and 0.896 ± 0.011 for the IP model. The band percentages above are out-of-fold across eight resampled 5-fold splits.
+5-fold ROC-AUC is 0.878 ± 0.037 on 383 labelled domains. The band percentages above are out-of-fold across eight resampled 5-fold splits.
 
 `confidence_score` ranks, it does not calibrate: 0.67 is not "67% likely malicious". Proper calibration was attempted and abandoned. Platt scaling made the calibration error worse, isotonic gained almost nothing and cost accuracy, and at 383 rows both were fitting noise. Publishing the measured band rate is more honest than a transformed number that looks more precise than the data supports.
 
-The IP figures rest on weaker ground. That dataset was never rebuilt with an ordinary-infrastructure benign class the way the domain one was, so its benign side still contains Tor exit nodes and resolved household-name domains, and averages 4.5 VirusTotal detections against the malicious class's 6.0.
+**Why the IP model was retired.** Its benign class was built by resolving domains to addresses, so every benign row was a mature multi-service host with names pointing at it, while every malicious row was a minimal single-purpose box pulled from a feed. Any feature correlating with "established host" then separated the two classes: `dns_record_count` scored AUC 0.139 and `total_open_ports` 0.299, both below the 0.5 of a useless feature and therefore inverted. It had learned to tell a busy server from a quiet one.
+
+Rebuilding the benign class from ordinary business hosting fixed the balance and the inversion but introduced a 98% dependence on VirusTotal, and produced a live false negative: a confirmed Aisuru C2 scored 0.168 benign because eight domains pointed at it. Matched sampling against URLhaus payload hosts did not help either, since those are compromised routers rather than hosting businesses, so the pairing never matched.
+
+Adding features would not have rescued it. Provider identity was the one candidate that escaped the confound, and it reduces to geography, since malicious skewed to Chinese cloud providers, so an ASN feature would flag legitimate businesses by where they happen to be hosted.
 
 </details>
 

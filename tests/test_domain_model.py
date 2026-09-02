@@ -25,7 +25,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.graph_scorer import GraphScorer
-from core.risk import BASE_RATES, DOMAIN_BAND_PRECISION, IP_BAND_PRECISION
+from core.risk import DOMAIN_BAND_PRECISION
 from core.temporal_scorer import TemporalScorer
 from core.scorer import ConfidenceScorer
 
@@ -62,7 +62,7 @@ BASELINE = {
     "thekinsmenservers.com": 0.615,
     "briansclub.cm": 0.963,
     "shhsift.click": 0.953,
-    "93.123.39.37": 0.872,
+    "93.123.39.37": 0.283,
 }
 DRIFT_TOLERANCE = 0.20
 
@@ -144,21 +144,46 @@ def main() -> int:
     check(DOMAIN_BAND_PRECISION["HIGH"] > DOMAIN_BAND_PRECISION["MEDIUM"] > DOMAIN_BAND_PRECISION["LOW"],
           "band precisions are ordered HIGH > MEDIUM > LOW")
 
-    # IP scores carry their own bands, measured on a set with a different prior.
-    # The base rate travels with them because a precision without it is not
-    # readable: 94% on the IP model is weaker evidence than 89% on the domain
-    # model, and only lift over the prior shows that.
+    # Addresses are scored from evidence rather than by a model, so they carry
+    # no band precision. The IP model was retired after its benign class was
+    # found to be built by resolving domains, which made every benign row a
+    # mature multi-service host and every malicious row a minimal box from a
+    # feed. dns_record_count scored AUC 0.139 and total_open_ports 0.299, both
+    # inverted, both artefacts of that sampling rather than facts about
+    # addresses.
+    print("\n-- addresses are scored from evidence, not by a model --")
     for indicator, entry in entries.items():
         if entry.get("type") != "ipv4" or indicator not in scores:
             continue
         result = scores[indicator]
-        check(result.get("band_precision") == IP_BAND_PRECISION.get(result.get("risk_level")),
-              f"{indicator[:30]:30} {result.get('risk_level'):6} carries {result.get('band_precision')}")
-        check(result.get("band_base_rate") == BASE_RATES["ip"],
-              f"{indicator[:30]:30} carries its base rate {result.get('band_base_rate')}")
+        check(result.get("band_precision") is None,
+              f"{indicator[:30]:30} carries no band precision")
+        check(bool(result.get("sources_answered")),
+              f"{indicator[:30]:30} names which sources answered: "
+              f"{result.get('sources_answered')}")
 
-    check(IP_BAND_PRECISION["HIGH"] / BASE_RATES["ip"] < DOMAIN_BAND_PRECISION["HIGH"] / BASE_RATES["domain"],
-          "IP HIGH is weaker lift than domain HIGH despite the larger percentage")
+    # A source with nothing to report must not vote innocent. Averaging the
+    # sources dragged a ThreatFox confidence-100 C2 to 0.475 MEDIUM because
+    # URLhaus answered "not found", and URLhaus tracks malware URLs rather than
+    # C2 addresses, so its silence about one says nothing.
+    quiet = scorer.score_any({
+        "indicator": "192.0.2.10", "type": "ipv4",
+        "results": {"threatfox": {"found": True, "max_confidence": 100},
+                    "urlhaus": {"found": False},
+                    "virustotal": {"malicious_votes": 0, "harmless_votes": 60},
+                    "otx": {"pulse_count": 0}},
+    })
+    check(quiet.get("risk_level") == "HIGH",
+          f"a confidence-100 listing stays HIGH when other sources are quiet "
+          f"(p={quiet.get('confidence_score')})")
+
+    silent = scorer.score_any({
+        "indicator": "192.0.2.11", "type": "ipv4",
+        "results": {"threatfox": {"error": "x"}, "urlhaus": {"error": "x"},
+                    "virustotal": {"error": "x"}, "otx": {"error": "x"}},
+    })
+    check(silent.get("risk_level") == "UNKNOWN",
+          f"an address no source answered on -> {silent.get('risk_level')}")
 
     # The suite previously scored only through ConfidenceScorer, so the blending
     # layers were never exercised and a bug there went unseen for as long as it

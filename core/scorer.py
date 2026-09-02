@@ -13,13 +13,7 @@ from core.features import extract_features
 # other silently disagreeing — the front end and the scorer already diverged
 # that way once, calling the same 0.55 group HIGH on one side and MEDIUM on
 # the other.
-from core.risk import (
-    BASE_RATES,
-    DEFAULT_THRESHOLDS,
-    DOMAIN_BAND_PRECISION,
-    IP_BAND_PRECISION,
-    score_to_risk,
-)
+from core.risk import BASE_RATES, DEFAULT_THRESHOLDS, DOMAIN_BAND_PRECISION, score_to_risk
 from config import MODEL_DIR
 
 logging.basicConfig(level=logging.ERROR)
@@ -132,15 +126,18 @@ class ConfidenceScorer:
         confidence_score = gb.predict_proba(matrix(gb))[0][1]
         is_anomaly = iso.predict(matrix(iso))[0] == -1
 
-        # The measured meaning of this band, so the score reads as the model's
+        # The measured meaning of the band, so the score reads as the model's
         # discrimination rather than as a probability. It is not calibrated:
-        # 0.67 does not mean a 67% chance of being malicious. The base rate goes
-        # with it, because a band precision is meaningless without the prior it
-        # was measured against and the two models were measured on different ones.
-        bands = DOMAIN_BAND_PRECISION if use_domain else IP_BAND_PRECISION
+        # 0.67 does not mean a 67% chance of being malicious, and the base rate
+        # travels with it because a precision means nothing without its prior.
+        #
+        # Only the domain model has measured bands. Addresses route to score_ip
+        # now, and any other type reaching here has no measurement behind it, so
+        # it gets none rather than one borrowed from a different distribution.
         fields = self._risk_fields(confidence_score)
-        fields["band_precision"] = bands.get(fields["risk_level"])
-        fields["band_base_rate"] = BASE_RATES["domain" if use_domain else "ip"]
+        if use_domain:
+            fields["band_precision"] = DOMAIN_BAND_PRECISION.get(fields["risk_level"])
+            fields["band_base_rate"] = BASE_RATES["domain"]
 
         return {
             "confidence_score": round(float(confidence_score), 4),
@@ -335,6 +332,113 @@ class ConfidenceScorer:
             "note": "Score derived from MalwareBazaar sample volume and malware category tags.",
         }
 
+    # VirusTotal detections earning full marks on an address. Deliberately low,
+    # and much lower than the file threshold, because VirusTotal is slow on fresh
+    # infrastructure: ten Aisuru C2 addresses that abuse.ch rated confidence 100
+    # were carrying 1 to 3 detections out of roughly 52 engines.
+    IP_DETECTION_FULL_MARKS = 6
+
+    # URLhaus entries earning full marks. A host serving five known malware URLs
+    # is a distribution point whatever else is true of it.
+    IP_URL_FULL_MARKS = 5
+
+    # Ceiling each source can reach on its own, combined by noisy-OR rather than
+    # averaged.
+    #
+    # Averaging was the first attempt and it reproduced the bug this codebase
+    # keeps finding. URLhaus answering "not found" scored zero and was folded
+    # into the mean, which dragged a ThreatFox confidence-100 Cobalt Strike C2
+    # down to 0.475 MEDIUM. But URLhaus tracks malware URLs, not C2 addresses,
+    # so its silence about a C2 is expected and says nothing about the address.
+    #
+    # Noisy-OR treats each source as independent evidence FOR maliciousness. A
+    # source with nothing to report contributes exactly nothing instead of
+    # voting innocent, and corroboration accumulates.
+    #
+    # ThreatFox leads because it is curated, carries its own confidence and is
+    # fastest on new infrastructure. VirusTotal sits third on purpose: weighting
+    # it higher rebuilds the failure the domain model was redone to escape, where
+    # the score could say nothing VirusTotal had not already said.
+    IP_EVIDENCE_CEILINGS = {"threatfox": 0.80, "urlhaus": 0.70, "virustotal": 0.50, "otx": 0.30}
+
+    def score_ip(self, pivot_result: dict) -> dict:
+        """
+        Scores an address from the evidence an IP pivot collects rather than
+        from a model.
+
+        The IP model it replaces never measured what it claimed to. Its benign
+        class was built by resolving domains, so every benign row had domains
+        pointing at it and mature multi-service hosting behind it, while every
+        malicious row was a minimal single-purpose box from a feed. Any feature
+        correlating with "established multi-service host" then separated the
+        classes, which is why dns_record_count scored AUC 0.139 and
+        total_open_ports 0.299 — both inverted, both artefacts of sampling.
+        Matched sampling against URLhaus payload hosts did not fix it, because
+        those are compromised routers rather than hosting businesses.
+
+        Measured band precision said the same thing before the cause was known:
+        every address published from this engine landed in the MEDIUM band, at
+        0.95x the base rate, which is no information at all.
+        """
+        results = pivot_result.get("results", {})
+        tf = results.get("threatfox", {}) or {}
+        uh = results.get("urlhaus", {}) or {}
+        vt = results.get("virustotal", {}) or {}
+        otx = results.get("otx", {}) or {}
+
+        # An error is an unanswered question. A zero from a source that did
+        # answer is a finding. Conflating them is how an outage becomes a clean
+        # bill of health.
+        answered = {
+            "threatfox": "error" not in tf and "found" in tf,
+            "urlhaus": "error" not in uh and "found" in uh,
+            "virustotal": "error" not in vt and "malicious_votes" in vt,
+            "otx": "error" not in otx and otx.get("pulse_count") is not None,
+        }
+
+        if not any(answered.values()):
+            return {
+                "confidence_score": 0.0,
+                "is_anomaly": False,
+                "risk_level": "UNKNOWN",
+                "note": "No source answered for this address.",
+            }
+
+        detections = vt.get("malicious_votes", 0) or 0
+        url_count = int(uh.get("url_count") or 0) if uh.get("found") else 0
+        pulses = otx.get("pulse_count") or 0
+
+        signals = {
+            "threatfox": (tf.get("max_confidence") or 0) / 100 if tf.get("found") else 0.0,
+            "urlhaus": min(url_count / self.IP_URL_FULL_MARKS, 1.0),
+            "virustotal": min(detections / self.IP_DETECTION_FULL_MARKS, 1.0),
+            "otx": min(pulses / 5, 1.0),
+        }
+
+        # Noisy-OR over the sources that answered. A source that answered with
+        # nothing found contributes a factor of 1 and leaves the score untouched,
+        # rather than averaging it downward.
+        remaining = 1.0
+        for source, ceiling in self.IP_EVIDENCE_CEILINGS.items():
+            if answered[source]:
+                remaining *= 1.0 - ceiling * signals[source]
+        confidence_score = 1.0 - remaining
+
+        return {
+            "confidence_score": round(float(confidence_score), 4),
+            "is_anomaly": False,
+            **self._risk_fields(confidence_score, thresholds=(0.5, 0.25)),
+            "sources_answered": sorted(k for k, v in answered.items() if v),
+            "malware_families": tf.get("malware_families") or [],
+            # ThreatFox's own call on whether the host was taken over rather than
+            # provisioned. It changes the response, not the score: a compromised
+            # host has an owner who is a victim and should be notified, not
+            # blocklisted.
+            "is_compromised": bool(tf.get("is_compromised")),
+            "malicious_urls": url_count,
+            "note": "Score derived from ThreatFox, URLhaus, VirusTotal and OTX evidence.",
+        }
+
     # VirusTotal detections earning full marks on a file. Roughly 70 engines
     # scan a sample: established malware lands in the 55-70 range, while a one
     # or two vendor hit is more often a false positive than a find. Saturating
@@ -447,8 +551,9 @@ class ConfidenceScorer:
           threat_group -> score_threat_group (MITRE ATT&CK coverage)
           software     -> score_software     (MalwareBazaar sample volume)
           hash         -> score_hash         (detections, catalogue, ATT&CK)
+          ipv4         -> score_ip           (ThreatFox, URLhaus, VT, OTX)
           email/username/filename -> score_identity (SpiderFoot findings)
-          ipv4/domain/other       -> score (ML model, infrastructure features)
+          domain/other            -> score (ML model, infrastructure features)
         """
         indicator_type = pivot_result.get("type", "")
 
@@ -458,6 +563,8 @@ class ConfidenceScorer:
             return self.score_software(pivot_result)
         elif indicator_type == "hash":
             return self.score_hash(pivot_result)
+        elif indicator_type == "ipv4":
+            return self.score_ip(pivot_result)
         elif indicator_type in {"email", "username", "filename"}:
             return self.score_identity(pivot_result)
         else:
