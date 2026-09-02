@@ -126,6 +126,15 @@ class OTXConnector:
                 # Other researchers' pulses only. Our own are listed
                 # separately so they stay visible without counting as
                 # corroboration.
+                # OTX's own verdict on whether it will accept this indicator.
+                # Non-empty means it sits in a whitelisted prefix or is otherwise
+                # rejected, and a pulse containing it will silently drop it.
+                # Nothing else the engine queries knows this: 178.128.173.150 was
+                # ThreatFox Aisuru at confidence 100, and OTX refused it anyway.
+                "otx_validation": [
+                    v.get("message") or v.get("name")
+                    for v in (data.get("validation") or [])
+                ],
                 "pulse_count": len(external),
                 "pulse_count_including_own": pulse_info.get("count", 0),
                 "own_pulse_count": len(own),

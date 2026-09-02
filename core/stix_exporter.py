@@ -289,6 +289,27 @@ def _is_known_malicious(domain: str) -> bool:
     return verdict
 
 
+
+def pivot_for(investigation: dict, name: str) -> dict:
+    """The pivot result for one indicator, or an empty dict."""
+    return next(
+        (p for p in investigation.get("full_results", [])
+         if (p.get("indicator") or "").lower() == name),
+        {},
+    )
+
+
+def _otx_rejection(pivot: dict) -> str:
+    """
+    Why OTX would refuse this indicator, or "" when it would accept it.
+
+    Empty on an unanswered lookup as well as a clean one, which is deliberate:
+    an OTX timeout is not grounds to drop an indicator the other sources back.
+    """
+    otx = (pivot.get("results") or {}).get("otx") or {}
+    return "; ".join(otx.get("otx_validation") or [])
+
+
 def _co_hosted_tenants(pivot: dict, investigated_domains: set[str]) -> list[str] | None:
     """
     Domains on this IP that belong to somebody else.
@@ -380,6 +401,16 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
             continue
         seen.add(name)
 
+        # OTX publishes its own verdict, and it is the only source here that
+        # knows whether the destination will accept an indicator. Publishing one
+        # it whitelists means it is silently dropped from the pulse, so the
+        # analyst believes they shared something they did not.
+        rejected = _otx_rejection(pivot_for(investigation, name))
+        if rejected:
+            excluded.append({"indicator": name,
+                             "reason": f"OTX will not accept this indicator: {rejected}"})
+            continue
+
         if name in _engine_artifacts(investigation):
             excluded.append({"indicator": name,
                              "reason": "engine artifact or hosting provider infrastructure"})
@@ -454,13 +485,28 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
     return included, excluded
 
 
+# Sources it is normal to name in a write-up. OTX extracts these from the prose
+# and whitelists them, so warning about them is noise rather than signal.
+CITED_SOURCES = {
+    "abuse.ch", "urlhaus.abuse.ch", "threatfox.abuse.ch", "bazaar.abuse.ch",
+    "feodotracker.abuse.ch", "virustotal.com", "www.virustotal.com",
+    "otx.alienvault.com", "alienvault.com", "shodan.io", "internetdb.shodan.io",
+    "censys.io", "search.censys.io", "crt.sh", "domaintools.com", "dnsdb.info",
+    "mitre.org", "attack.mitre.org", "tranco-list.eu", "digitalocean.com",
+}
+
 # Indicator-shaped strings, for checking a description does not smuggle any.
+#
+# The TLD is matched generically rather than from a list. A hardcoded list was
+# missing .ch, so a description citing abuse.ch and urlhaus.abuse.ch passed the
+# check clean and OTX extracted both as indicators — the exact leak this exists
+# to catch, hidden by the very allowlist meant to make it precise.
 _INDICATOR_SHAPES = re.compile(
     r"\b(?:"
     r"(?:\d{1,3}\.){3}\d{1,3}"
     r"|[a-fA-F0-9]{32,64}"
     r"|(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+"
-    r"(?:com|net|org|io|click|at|us|za|info|xyz|top|co|biz|ru|cn|link|shop|live)"
+    r"[a-zA-Z]{2,24}"
     r")\b"
 )
 
@@ -478,8 +524,13 @@ def leaked_indicators(description: str, included: list[dict]) -> list[str]:
     leaked = []
     for match in _INDICATOR_SHAPES.findall(description):
         value = match.lower().strip(".")
-        if value and value not in published and value not in leaked:
-            leaked.append(value)
+        if not value or value in published or value in leaked:
+            continue
+        # Naming the source of a claim is how a write-up stays checkable, so
+        # those are excluded rather than reported. Everything else is a leak.
+        if value in CITED_SOURCES:
+            continue
+        leaked.append(value)
     return leaked
 
 
