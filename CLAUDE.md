@@ -104,11 +104,39 @@ No `.joblib` is tracked. A model file is a pickle, so loading one from a pull
 request runs that author's code. Clones train from the published dataset, which
 reproduces the shipped predictions exactly.
 
+## Measured, 2 September 2026
+
+Full labelled set, `scripts/evaluate.py`, 33 cases:
+
+```
+accuracy    30/33 = 91%   CI [76%, 97%]
+  malicious 17/18
+  benign    11/13
+  unknown     2/2
+score alone 25/33      agent 5 overrides, 3 fixed, 0 broke
+```
+
+Domains re-run after the evidence floor landed: malicious 8/8, up from 7/8. The
+three compromised sites moved from agent-override to concur, so the score is now
+right on its own and the LLM is no longer load-bearing for that blind spot.
+
+Every remaining miss is a **false positive on legitimate infrastructure**, which
+is the direction that harms a third party. There are no false negatives.
+
 ## Known limitations
 
-- **Compromised legitimate sites are missed.** Their infrastructure is genuinely
-  benign; the maliciousness is in served content, which no feature observes. The
-  agent usually catches these from feed evidence.
+- **The agent is non-deterministic, and this is now the largest single source of
+  error.** On identical data and a byte-identical score of 0.157,
+  dizaynholding.com drew LOW on one run and MEDIUM on the next.
+  raspberryhillsshop.com drew HIGH on one run and no THREAT LEVEL line at all on
+  the next. Nothing measures this. The evidence floor removed the LLM from one
+  blind spot; the same reasoning applies elsewhere. Deterministic evidence should
+  decide wherever it can, and the agent should be narrative rather than
+  load-bearing.
+- **Compromised legitimate sites** are invisible to the model, since their
+  infrastructure is genuinely benign and the maliciousness is in served content.
+  Feed evidence now floors the model, which fixes the listed ones deterministically.
+  A compromised site no feed has caught yet is still missed.
 - **Bulk hosting is over-flagged**, for the mirror-image reason.
 - **`confidence_score` ranks, it does not calibrate.** Post-hoc calibration was
   tried and rejected: Platt made ECE worse, isotonic cost AUC, and at 383 rows
@@ -124,6 +152,19 @@ reproduces the shipped predictions exactly.
 
 ## Open items
 
+- `claude-fable-5-1` model bump in `core/agent.py` was uncommitted and is not
+  mine; confirm before committing it.
+- Four OTX pulses built and unuploaded: `aisuru_pulse.json` (9 valid IOCs,
+  drop 178.128.173.150, OTX whitelists it), `clearfake_campaign_pulse.json` (24),
+  `okami_pulse.json` (18), `rh_pulse.json` (1). Upload the pulse file only, never
+  the `.audit.json`, which names co-hosted third parties.
+- Grow the benign half of the evaluation set. 13 cases gives CI [58%, 96%], and
+  benign is where false positives live.
+- README rewrite in the style of the owner's `ioc-reputation-scorer`: three
+  badges, one dense opening paragraph, short `Label - detail` bullets,
+  code-forward, plain `Known Limitations` section.
+- LinkedIn post drafted but unposted, thanking DomainTools and Ian Campbell, who
+  arranged the access at BSides.
 - Censys is out of credits; research access is being arranged. `high_risk_country`
   reads only from Censys and is therefore dead.
 - `crt.sh` 502s frequently and has no fallback. DomainTools Iris `ssl_info`
