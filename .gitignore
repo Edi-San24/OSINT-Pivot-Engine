@@ -6,6 +6,11 @@ mlflow.db
 # Licensed source blocks are stripped before anything lands here.
 !tests/fixtures/*.json
 
+# The labelled evaluation set. Published because the labels are the scarce part:
+# most of them are analyst judgement the feeds do not supply, and an accuracy
+# claim nobody can reproduce is not a measurement.
+!tests/evaluation_set.json
+
 # The domain training set is published so a clone can reproduce the model rather
 # than be handed a pickle. Training is deterministic — random_state=42 throughout
 # — and retraining from this file gives byte-identical predictions. The rest of

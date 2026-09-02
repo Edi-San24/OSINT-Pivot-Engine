@@ -1,0 +1,49 @@
+{
+  "note": "Frozen labelled evaluation set. Never tune against it. Re-run scripts/evaluate.py after any scoring change and compare the interval, not the point estimate.",
+  "labels": {
+    "malicious": "confirmed attacker infrastructure or a compromised host actively serving malicious content",
+    "benign": "legitimate infrastructure, including the awkward cases the model is documented as over-flagging",
+    "unknown": "nothing exists to score, so the only correct answer is UNKNOWN"
+  },
+  "cases": [
+    {"indicator": "briansclub.cm", "type": "domain", "truth": "malicious", "source": "analyst", "note": "carding marketplace, zero VirusTotal detections, the feeds do not carry it"},
+    {"indicator": "shhsift.click", "type": "domain", "truth": "malicious", "source": "analyst", "note": "newly registered, invoice-themed path, VT 4/55"},
+    {"indicator": "jeuxdecafebretagne.fr", "type": "domain", "truth": "malicious", "source": "feed", "note": "ClearFake, compromised legitimate French business site"},
+    {"indicator": "shootartphotografie.ch", "type": "domain", "truth": "malicious", "source": "feed", "note": "ClearFake, compromised legitimate Swiss photographer"},
+    {"indicator": "thevictorytoken.us", "type": "domain", "truth": "malicious", "source": "feed", "note": "ClearFake, purpose-registered"},
+    {"indicator": "glyco--free.com", "type": "domain", "truth": "malicious", "source": "analyst", "note": "ClearFake supplement storefront, NameCheap bulk registration"},
+    {"indicator": "retinaclr.com", "type": "domain", "truth": "malicious", "source": "analyst", "note": "same cluster, registered same day as its own misspelling"},
+    {"indicator": "raspberryhillsshop.com", "type": "domain", "truth": "malicious", "source": "feed", "note": "ClearFake, wildcard zone, ThreatFox marks it compromised"},
+
+    {"indicator": "thekinsmenservers.com", "type": "domain", "truth": "benign", "source": "analyst", "note": "legitimate hosting provider, zero VirusTotal, the model over-flags this shape"},
+    {"indicator": "crystalwebhost.com", "type": "domain", "truth": "benign", "source": "analyst", "note": "web host, the bulk-hosting false-positive case"},
+    {"indicator": "americancasinoguidebook.com", "type": "domain", "truth": "benign", "source": "analyst", "note": "licensed gambling, a sector that correlates with abuse"},
+    {"indicator": "dizaynholding.com", "type": "domain", "truth": "benign", "source": "analyst", "note": "ordinary business, Tranco rank window"},
+    {"indicator": "easyweb.eu", "type": "domain", "truth": "benign", "source": "analyst", "note": "ordinary business the model scored MEDIUM"},
+    {"indicator": "solidstatelogic.com", "type": "domain", "truth": "benign", "source": "analyst", "note": "established manufacturer"},
+    {"indicator": "shuttleworthfoundation.org", "type": "domain", "truth": "benign", "source": "analyst", "note": "foundation"},
+    {"indicator": "mbway.pt", "type": "domain", "truth": "benign", "source": "analyst", "note": "Portuguese national payment system"},
+
+    {"indicator": "164.90.234.119", "type": "ipv4", "truth": "malicious", "source": "feed", "note": "Aisuru C2, ThreatFox 100, VirusTotal only 1 of 51"},
+    {"indicator": "167.71.54.89", "type": "ipv4", "truth": "malicious", "source": "feed", "note": "Aisuru C2, eight domains resolve to it, the case the retired model called benign"},
+    {"indicator": "138.68.169.201", "type": "ipv4", "truth": "malicious", "source": "feed", "note": "Aisuru C2"},
+    {"indicator": "190.123.46.208", "type": "ipv4", "truth": "malicious", "source": "analyst", "note": "Okami Mirai distribution host, 15 live payload URLs"},
+    {"indicator": "154.12.90.231", "type": "ipv4", "truth": "malicious", "source": "feed", "note": "Cobalt Strike C2 on a compromised shared host"},
+    {"indicator": "23.26.4.70", "type": "ipv4", "truth": "malicious", "source": "feed", "note": "Remus"},
+    {"indicator": "46.8.228.191", "type": "ipv4", "truth": "malicious", "source": "feed", "note": "XMRIG"},
+    {"indicator": "142.93.100.111", "type": "ipv4", "truth": "malicious", "source": "feed", "note": "Aisuru"},
+
+    {"indicator": "45.33.8.196", "type": "ipv4", "truth": "benign", "source": "analyst", "note": "Linode hosting, ordinary business"},
+    {"indicator": "144.76.139.199", "type": "ipv4", "truth": "benign", "source": "analyst", "note": "Hetzner hosting, ordinary business"},
+    {"indicator": "195.201.154.22", "type": "ipv4", "truth": "benign", "source": "analyst", "note": "Hetzner hosting"},
+    {"indicator": "23.227.38.65", "type": "ipv4", "truth": "benign", "source": "analyst", "note": "Shopify infrastructure, shared and legitimate"},
+
+    {"indicator": "db349b97c37d22f5ea1d1841e3c89eb4", "type": "hash", "truth": "malicious", "source": "analyst", "note": "WannaCry, 68 detections"},
+    {"indicator": "74eb23de1b2fdc7862447dddaadaa82fd5b43659b3c41205a40ea194dff373a9", "type": "hash", "truth": "benign", "source": "analyst", "note": "Cloudflare tunnel binary flagged as PUA by 13 engines, legitimate software"},
+
+    {"indicator": "Akira", "type": "threat_group", "truth": "malicious", "source": "analyst", "note": "ATT&CK-profiled ransomware group"},
+
+    {"indicator": "thisdomainshouldnotexist-abc987xyz.com", "type": "domain", "truth": "unknown", "source": "analyst", "note": "never registered, all-zero feature vector"},
+    {"indicator": "192.0.2.55", "type": "ipv4", "truth": "unknown", "source": "analyst", "note": "RFC 5737 documentation space, not routable"}
+  ]
+}

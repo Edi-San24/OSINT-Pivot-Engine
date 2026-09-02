@@ -26,7 +26,18 @@ LOG_PATH = os.path.join(DATA_DIR, "verdicts.jsonl")
 # split builds a self-labelling set to check calibration against.
 
 
-def _row(result: dict) -> dict:
+# Where a ground-truth label came from, because that decides what it is worth.
+#
+# A label copied from a feed the engine already queries measures agreement with
+# that feed, not correctness. The labels that carry information are the ones the
+# feeds did not supply: briansclub.cm was a carding marketplace with zero
+# VirusTotal detections, thekinsmenservers.com a legitimate host the model
+# flagged, eversxcellence.co.za compromised rather than attacker-owned. Those
+# took analyst judgement, which is exactly why they are worth recording.
+TRUTH_SOURCES = {"analyst", "feed", "published"}
+
+
+def _row(result: dict, truth: str | None = None, truth_source: str = "analyst") -> dict:
     """One record per investigation, enough to re-derive the decision."""
     context_score = result.get("context_score", 0.0)
     agent_level = extract_threat_level(result.get("summary", ""))
@@ -53,16 +64,43 @@ def _row(result: dict) -> dict:
         "decided_by": decided_by,
         "insufficient_data": bool(result.get("insufficient_data")),
         "agreed": (agent_level == score_level) if comparable else None,
+        # What the answer should have been, when known. Absent on most rows and
+        # that is expected: accuracy is measured over the labelled subset, while
+        # agreement is measured over everything.
+        "truth": truth,
+        "truth_source": truth_source if truth else None,
+        "correct": _is_correct(resolved, truth) if truth else None,
     }
 
 
-def record(result: dict, path: str = LOG_PATH) -> dict | None:
+def _is_correct(resolved: str, truth: str | None) -> bool | None:
+    """
+    Whether the resolved level matched the label.
+
+    HIGH and MEDIUM both count as flagged, because an analyst looks at either.
+    Reading MEDIUM as a miss would punish the engine for being uncertain when it
+    is uncertain, which is the behaviour the band measurements asked for.
+    """
+    if truth == "malicious":
+        return resolved in {"HIGH", "MEDIUM"}
+    if truth == "benign":
+        return resolved in {"LOW", "UNKNOWN"}
+    if truth == "unknown":
+        return resolved == "UNKNOWN"
+    return None
+
+
+def record(result: dict, path: str = LOG_PATH, truth: str | None = None,
+           truth_source: str = "analyst") -> dict | None:
     """
     Appends one row and returns it, or None if logging failed.
     Never raises: an audit trail must not be able to break an investigation.
+
+    truth is optional and one of "malicious", "benign" or "unknown". Supplying it
+    turns the row into an accuracy datapoint rather than only an agreement one.
     """
     try:
-        row = _row(result)
+        row = _row(result, truth=truth, truth_source=truth_source)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a") as f:
             f.write(json.dumps(row) + "\n")
@@ -79,8 +117,33 @@ def record(result: dict, path: str = LOG_PATH) -> dict | None:
         return None
 
 
+def _wilson(hits: int, total: int, z: float = 1.96) -> list:
+    """
+    95% confidence interval on a rate, so a small sample cannot be read as a
+    measurement.
+
+    Added because a 7-of-10 run was reported as 70% against a historical 32%,
+    and the intervals overlapped at [40, 89] and [20, 47]. The two rates were
+    indistinguishable, and the point estimate alone concealed that.
+    """
+    if total == 0:
+        return [0.0, 0.0]
+    p = hits / total
+    d = 1 + z * z / total
+    centre = (p + z * z / (2 * total)) / d
+    half = z * ((p * (1 - p) / total + z * z / (4 * total * total)) ** 0.5) / d
+    return [round(max(0.0, centre - half), 4), round(min(1.0, centre + half), 4)]
+
+
 def summarize(path: str = LOG_PATH) -> dict:
-    """Disagreement rates overall and per indicator type."""
+    """
+    Agreement and, over the labelled subset, accuracy.
+
+    The two are different questions and only one of them matters on its own.
+    Agreement says the score and the agent reached the same level; both can
+    concur and both be wrong. Accuracy needs a label, which is why record()
+    takes one.
+    """
     rows = []
     try:
         with open(path) as f:
@@ -104,6 +167,14 @@ def summarize(path: str = LOG_PATH) -> dict:
         entry["compared"] += 1
         entry["split"] += 1 if r["agreed"] is False else 0
 
+    labelled = [r for r in rows if r.get("correct") is not None]
+    correct = [r for r in labelled if r["correct"]]
+    by_truth = defaultdict(lambda: {"n": 0, "correct": 0})
+    for r in labelled:
+        entry = by_truth[r.get("truth", "unknown")]
+        entry["n"] += 1
+        entry["correct"] += 1 if r["correct"] else 0
+
     return {
         "total": len(rows),
         "comparable": len(comparable),
@@ -113,6 +184,17 @@ def summarize(path: str = LOG_PATH) -> dict:
         "by_indicator_type": {
             k: {**v, "rate": round(v["split"] / v["compared"], 4)}
             for k, v in sorted(by_type.items())
+        },
+        "disagreement_ci": _wilson(len(splits), len(comparable)),
+        # Accuracy over rows carrying a ground-truth label. Absent until labels
+        # are supplied, and reported with an interval because the labelled
+        # subset is small and a bare rate invites over-reading.
+        "labelled": len(labelled),
+        "accuracy": round(len(correct) / len(labelled), 4) if labelled else None,
+        "accuracy_ci": _wilson(len(correct), len(labelled)) if labelled else None,
+        "accuracy_by_truth": {
+            k: {**v, "rate": round(v["correct"] / v["n"], 4)}
+            for k, v in sorted(by_truth.items())
         },
         # The interesting ones: the scorer overruled a stated agent verdict.
         "scorer_overrode_agent": [
