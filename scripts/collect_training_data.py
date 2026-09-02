@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
 import io
+import ipaddress
 import socket
 import threading
 import zipfile
@@ -170,33 +171,6 @@ def fetch_malicious_ips() -> list:
 # that barely differed on it, while carrying half the model's weight.
 BENIGN_TOR_CAP = 20
 
-# Resolved live rather than hardcoded, which gives real and varied hosting:
-# CDN edges, cloud front ends, and corporate infrastructure.
-CLEAN_DOMAINS = [
-    "google.com", "youtube.com", "facebook.com", "wikipedia.org", "amazon.com",
-    "reddit.com", "x.com", "instagram.com", "linkedin.com", "netflix.com",
-    "microsoft.com", "apple.com", "office.com", "live.com", "bing.com",
-    "github.com", "gitlab.com", "stackoverflow.com", "python.org", "npmjs.com",
-    "docker.com", "kubernetes.io", "mozilla.org", "debian.org", "ubuntu.com",
-    "redhat.com", "apache.org", "nginx.org", "cloudflare.com", "fastly.com",
-    "akamai.com", "digitalocean.com", "linode.com", "heroku.com", "vercel.com",
-    "netlify.com", "atlassian.com", "slack.com", "zoom.us", "dropbox.com",
-    "salesforce.com", "oracle.com", "ibm.com", "intel.com", "nvidia.com",
-    "adobe.com", "shopify.com", "stripe.com", "paypal.com", "visa.com",
-    "mastercard.com", "chase.com", "bankofamerica.com", "wellsfargo.com",
-    "nytimes.com", "bbc.co.uk", "theguardian.com", "reuters.com", "cnn.com",
-    "npr.org", "economist.com", "ft.com", "bloomberg.com", "wsj.com",
-    "harvard.edu", "mit.edu", "stanford.edu", "berkeley.edu", "ox.ac.uk",
-    "cam.ac.uk", "ethz.ch", "cern.ch", "nasa.gov", "nih.gov",
-    "cdc.gov", "noaa.gov", "usa.gov", "europa.eu", "who.int",
-    "un.org", "ietf.org", "iana.org", "icann.org", "w3.org",
-    "archive.org", "wikimedia.org", "creativecommons.org", "eff.org", "fsf.org",
-    "spotify.com", "twitch.tv", "vimeo.com", "soundcloud.com", "imdb.com",
-    "booking.com", "airbnb.com", "expedia.com", "tripadvisor.com", "uber.com",
-    "ebay.com", "etsy.com", "walmart.com", "target.com", "costco.com",
-    "wordpress.org", "wix.com", "squarespace.com", "godaddy.com", "namecheap.com",
-    "zendesk.com", "hubspot.com", "mailchimp.com", "twilio.com", "sendgrid.com",
-]
 
 
 # Whole-batch ceiling on DNS. Most lookups take milliseconds, but
@@ -238,10 +212,111 @@ def _resolve_domains(domains: list, timeout: int = DNS_BATCH_TIMEOUT) -> list:
     return list(resolved.values())
 
 
-def fetch_benign_ips() -> list:
+# Tranco domains resolved per batch. Resolution loses some to failures, more to
+# deduplication, and most of all to the CDN filter below, so the pool is heavily
+# oversampled against the target.
+TRANCO_IP_OVERSAMPLE = 12
+
+# CDN edge ranges, dropped from the benign class.
+#
+# Resolving ordinary Tranco domains does not by itself give ordinary hosting:
+# 68% of a sample landed on Cloudflare, because most small businesses now sit
+# behind a CDN. That reproduces the exact defect this rewrite exists to remove,
+# since a CDN edge is not indexed by Shodan and fronts hundreds of names.
+#
+# Filtering here is on infrastructure identity, not on a feature. Dropping an
+# address because it belongs to Cloudflare is the same kind of judgement as
+# dropping a domain because it is a piracy site; dropping one because it has no
+# Shodan record would be filtering on shodan_blocked and would manufacture the
+# separation the model is supposed to find.
+#
+# Not exhaustive, and does not need to be. Anything it misses stays in the class
+# as a hard negative rather than being silently mislabelled.
+CDN_RANGES = [
+    # Cloudflare
+    "104.16.0.0/12", "172.64.0.0/13", "162.158.0.0/15", "198.41.128.0/17",
+    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "141.101.64.0/18",
+    "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22",
+    # Fastly
+    "151.101.0.0/16", "199.232.0.0/16", "146.75.0.0/16",
+    # Akamai
+    "23.32.0.0/11", "23.192.0.0/11", "104.64.0.0/10", "184.24.0.0/13",
+    # Amazon CloudFront
+    "13.32.0.0/15", "13.224.0.0/14", "52.84.0.0/15", "54.192.0.0/16",
+    # Google / GCP front ends
+    "34.96.0.0/12", "35.190.0.0/17", "142.250.0.0/15",
+]
+
+
+def fetch_tranco_ips(limit: int, exclude: set | None = None) -> list:
     """
-    Builds the benign set from live resolution of well-known domains, plus a
-    capped number of Tor exits, shared hosting, and public resolvers.
+    Ordinary business hosting addresses, from resolving the Tranco rank window.
+
+    This replaces resolution of a hardcoded famous-domain list, which was the
+    bulk of the benign class and quietly taught the model two things that are
+    properties of famous domains rather than of safety.
+
+    Famous domains resolve to CDN edges. Shodan InternetDB does not index those,
+    so 61% of the old benign class had shodan_blocked set against 43% of the
+    malicious class, and the model learned that an absent Shodan record means
+    benign — absence read as evidence, the same failure this codebase keeps
+    finding elsewhere. CDN edges also front hundreds of names, so benign rows
+    averaged 4.19 passive DNS records against 1.30 for malicious, inverting that
+    feature too.
+
+    Ordinary business hosting is a real server that Shodan indexes and that
+    carries ordinary tenancy, which is the distribution an investigated address
+    is actually drawn from.
+    """
+    try:
+        ranked = _load_tranco()
+    except Exception as e:
+        logger.warning(f"Tranco fetch failed: {str(e)[:100]}")
+        return []
+
+    window = [d for rank, d in ranked if TRANCO_MIN_RANK <= rank <= TRANCO_MAX_RANK]
+    random.shuffle(window)
+
+    blocked = {ip.strip() for ip in (exclude or set())}
+    cdn_nets = [ipaddress.ip_network(c) for c in CDN_RANGES]
+    found: list[str] = []
+    dropped = {"cdn": 0, "reserved": 0}
+
+    for start in range(0, len(window), limit * TRANCO_IP_OVERSAMPLE):
+        batch = window[start:start + limit * TRANCO_IP_OVERSAMPLE]
+        if not batch:
+            break
+        for ip in _resolve_domains(batch):
+            if ip in blocked or ip in found:
+                continue
+            try:
+                parsed = ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            # Documentation, private and loopback space reaches here through
+            # misconfigured DNS. One sample resolved to 198.51.100.100, which is
+            # RFC 5737 documentation space and describes nothing real.
+            if not parsed.is_global:
+                dropped["reserved"] += 1
+                continue
+            if any(parsed in net for net in cdn_nets):
+                dropped["cdn"] += 1
+                continue
+            found.append(ip)
+        logger.info(
+            f"{len(found)}/{limit} ordinary addresses "
+            f"(dropped {dropped['cdn']} CDN, {dropped['reserved']} reserved)"
+        )
+        if len(found) >= limit:
+            break
+
+    return found[:limit]
+
+
+def fetch_benign_ips(limit: int = BENIGN_SAMPLE_SIZE, exclude: set | None = None) -> list:
+    """
+    Builds the benign set from ordinary business hosting, plus capped Tor exits
+    and shared hosting kept deliberately as hard negatives.
 
     Never pads by duplication. The previous version repeated its own list to
     reach the target size, so more than half the benign samples were copies of
@@ -251,19 +326,16 @@ def fetch_benign_ips() -> list:
     logger.info("Building benign set...")
     benign_ips = []
 
-    # Public DNS resolvers, unambiguously clean
-    benign_ips.extend([
-        "8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1",
-        "9.9.9.9", "149.112.112.112", "208.67.222.222",
-        "208.67.220.220", "209.244.0.3", "64.6.64.6",
-    ])
-
-    # The bulk of the class: real hosting behind well-known domains
-    resolved = _resolve_domains(CLEAN_DOMAINS)
-    logger.info(f"Resolved {len(resolved)}/{len(CLEAN_DOMAINS)} clean domains.")
+    # The bulk of the class. Public DNS resolvers and famous-domain resolution
+    # used to sit here; both are anycast or CDN infrastructure that no ordinary
+    # investigation encounters, and both are what inverted the features above.
+    resolved = fetch_tranco_ips(limit, exclude=exclude)
+    logger.info(f"Resolved {len(resolved)} ordinary hosting addresses from Tranco.")
     benign_ips.extend(resolved)
 
-    # Shared hosting, ambiguous reputation by design
+    # Shared hosting, ambiguous reputation by design. Kept for the same reason
+    # the domain set keeps its junky-but-legitimate names: removing the hard
+    # cases inflates the metrics and hides the real error rate.
     benign_ips.extend([
         "198.54.117.197", "198.54.117.198", "198.54.117.199",
         "198.54.117.200", "198.54.117.201",
@@ -273,7 +345,8 @@ def fetch_benign_ips() -> list:
         "193.169.145.20", "193.169.145.21", "193.169.145.22",
     ])
 
-    # Academic and government
+    # Academic and government. Real servers rather than CDN edges, so they stay,
+    # but capped in the same spirit as the Tor exits.
     benign_ips.extend([
         "128.112.136.11", "18.7.22.69", "171.67.215.200",
         "169.229.131.81", "128.95.155.135", "192.20.225.10",
@@ -297,7 +370,8 @@ def fetch_benign_ips() -> list:
     except Exception as e:
         logger.warning(f"Could not fetch Tor list: {str(e)[:100]}")
 
-    unique = list(dict.fromkeys(benign_ips))[:BENIGN_SAMPLE_SIZE]
+    blocked = {ip.strip() for ip in (exclude or set())}
+    unique = [ip for ip in dict.fromkeys(benign_ips) if ip not in blocked][:limit]
     tor_share = min(BENIGN_TOR_CAP, len(unique)) / max(len(unique), 1)
     logger.info(
         f"Collected {len(unique)} unique benign IPs, no duplicates. "
@@ -306,7 +380,7 @@ def fetch_benign_ips() -> list:
     return unique
 
 
-def collect_features(ips: list, label: int) -> list:
+def collect_features(ips: list, label: int, checkpoint: str | None = None) -> list:
     """
     Extracts features for each IP and attaches a label. 0 = benign, 1 = malicious.
 
@@ -318,6 +392,7 @@ def collect_features(ips: list, label: int) -> list:
     executor = PivotExecutor()
     samples = []
     skipped = 0
+    consecutive_quota_errors = 0
 
     for i, ip in enumerate(ips):
         logger.info(f"Processing {i+1}/{len(ips)}: {ip} (label={label})")
@@ -334,13 +409,26 @@ def collect_features(ips: list, label: int) -> list:
             if REQUIRE_VIRUSTOTAL and vt_error:
                 skipped += 1
                 logger.warning(f"  skipped {ip}: VirusTotal {str(vt_error)[:60]}")
+
+                if "429" in str(vt_error):
+                    consecutive_quota_errors += 1
+                    if consecutive_quota_errors >= MAX_CONSECUTIVE_QUOTA_ERRORS:
+                        logger.error(
+                            f"{consecutive_quota_errors} consecutive 429s — daily "
+                            f"VirusTotal quota ({VT_DAILY_QUOTA}) is spent. Stopping "
+                            f"with {len(samples)} row(s); resume tomorrow."
+                        )
+                        break
                 time.sleep(RATE_LIMIT)
                 continue
 
+            consecutive_quota_errors = 0
             features = extract_features({"indicator": ip, "type": "ipv4", "results": results})
             features["indicator"] = ip
             features["label"] = label
             samples.append(features)
+            if checkpoint:
+                _checkpoint(samples, checkpoint)
         except Exception as e:
             logger.error(f"Failed to process {ip}: {str(e)[:100]}")
 
@@ -452,7 +540,7 @@ def fetch_malicious_domains(limit: int = MALICIOUS_SAMPLE_SIZE) -> list:
     return unique
 
 
-# Benign domains come from the Tranco rank window, not from CLEAN_DOMAINS.
+# Benign domains come from the Tranco rank window, not from a famous-domain list.
 #
 # A benign class of household names is trivially separable by VirusTotal vote
 # count, so gradient boosting took that shortcut and ignored everything else:
@@ -538,10 +626,10 @@ def fetch_benign_domains(limit: int = BENIGN_SAMPLE_SIZE, exclude: set | None = 
     """
     Benign domains: ordinary businesses from the Tranco rank window.
 
-    There is deliberately no CLEAN_DOMAINS option here. That list is the bug
-    this source exists to fix — every variant trained against it found a
-    shortcut — so the ability to regenerate it is a footgun, not a feature. It
-    survives above only because the IP arm resolves it for hosting addresses.
+    There is deliberately no famous-domain option here. That list was the bug
+    this source exists to fix, since every variant trained against it found a
+    shortcut, so the ability to regenerate it is a footgun rather than a
+    feature. It has now been removed from the IP arm too.
     """
     domains = fetch_tranco_domains(limit, exclude={d.lower() for d in (exclude or set())})
     if not domains:
@@ -671,27 +759,47 @@ def main():
         )
 
     logger.info("Starting data collection pipeline...")
+    output_path = args.output if args.output != DOMAIN_OUTPUT_PATH else OUTPUT_PATH
 
     malicious_ips = fetch_malicious_ips()
-    benign_ips = fetch_benign_ips()
+
+    # An address serving malware is not a benign sample whatever else resolves
+    # to it, so the malicious set is excluded from the benign one before either
+    # is collected.
+    if args.benign_file:
+        benign_ips = [b for b in _read_candidates(args.benign_file) if b not in set(malicious_ips)]
+        logger.info(f"Loaded {len(benign_ips)} vetted benign addresses from {args.benign_file}.")
+    else:
+        benign_ips = fetch_benign_ips(args.benign, exclude=set(malicious_ips))
+
+    if args.dry_run:
+        _write_candidates(benign_ips, BENIGN_IP_CANDIDATES_PATH)
+        return
+
+    if not benign_ips:
+        logger.error("No benign addresses — aborting rather than writing a one-class dataset.")
+        return
 
     logger.info("Collecting features for malicious IPs...")
-    malicious_samples = collect_features(malicious_ips, label=1)
+    malicious_samples = collect_features(
+        malicious_ips[:args.malicious], label=1,
+        checkpoint=f"{output_path}.malicious.partial",
+    )
 
     logger.info("Collecting features for benign IPs...")
-    benign_samples = collect_features(benign_ips, label=0)
+    benign_samples = _drop_suspect_benign(
+        collect_features(benign_ips, label=0, checkpoint=f"{output_path}.benign.partial")
+    )
 
-    all_samples = malicious_samples + benign_samples
-    df = pd.DataFrame(all_samples)
-    df = df.fillna(0)
+    df = pd.DataFrame(malicious_samples + benign_samples).fillna(0)
 
-    if os.path.exists(OUTPUT_PATH):
-        existing = pd.read_csv(OUTPUT_PATH)
+    if os.path.exists(output_path):
+        existing = pd.read_csv(output_path)
         df = pd.concat([existing, df], ignore_index=True).drop_duplicates()
         logger.info(f"Appended to existing dataset. Total samples: {len(df)}")
 
-    df.to_csv(OUTPUT_PATH, index=False)
-    logger.info(f"Saved {len(df)} samples to {OUTPUT_PATH}")
+    df.to_csv(output_path, index=False)
+    logger.info(f"Saved {len(df)} samples to {output_path}")
     logger.info(f"Malicious: {len(malicious_samples)} | Benign: {len(benign_samples)}")
 
 
@@ -725,6 +833,23 @@ def _drop_suspect_benign(samples: list) -> list:
 # benign label on one of those teaches the model the exact opposite of the
 # signal it is meant to learn.
 BENIGN_CANDIDATES_PATH = os.path.join(DATA_DIR, "benign_candidates.txt")
+BENIGN_IP_CANDIDATES_PATH = os.path.join(DATA_DIR, "benign_ip_candidates.txt")
+
+
+def _write_candidates(values: list, path: str) -> None:
+    """Writes a benign shortlist for review before any quota is spent on it."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(
+            "# Benign candidates for review. Delete any line that could plausibly\n"
+            "# be attacker infrastructure, then collect with --benign-file.\n"
+            "# Do NOT filter on ports, DNS records or Shodan coverage — those are\n"
+            "# features, and filtering on them manufactures the separation you are\n"
+            "# measuring.\n"
+        )
+        handle.write("\n".join(values) + "\n")
+    logger.info(f"Wrote {len(values)} benign candidates to {path}")
+    logger.info(f"Review it, then re-run with --benign-file {path}")
 
 
 def _read_candidates(path: str) -> list:
