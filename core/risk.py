@@ -4,22 +4,26 @@
 # two front ends can never disagree about the same indicator.
 
 
-# Types where the scorer's thresholds are authoritative and the agent's
-# narrative verdict must not override them.
+# Types the graph and temporal layers do not apply to, so core.agent blends them
+# by chained evidence instead.
 NON_INFRASTRUCTURE_TYPES = {
     "threat_group", "software", "email", "username", "filename"
 }
 
-# Types whose own scorer is authoritative, so the agent must not overrule it.
-# Deliberately narrower than the set above.
+# The scorer is authoritative for every type. There used to be a narrower set of
+# types the agent could not overrule, which meant the LLM decided the verdict on
+# domains, addresses, URLs, hashes and identities. It is non-deterministic, so
+# the same investigation resolved differently on repeat runs, and that became the
+# largest single source of error measured. resolve_risk_level no longer reads the
+# summary; the agent's read is recorded as dissent and shown, never applied.
 #
-# score_threat_group and score_software are calibrated against measured ATT&CK
-# and MalwareBazaar distributions, so they mean something. score_identity is
-# min(finding_count / 50, 1.0) — a measure of how much SpiderFoot returned, not
-# of how dangerous the identity is. One finding scores 0.02 whether the handle
-# belongs to nobody or to a ransomware group's spokesperson, which is exactly
-# where the agent's judgement is worth more than the number.
-SCORER_AUTHORITATIVE_TYPES = {"threat_group", "software"}
+# One case genuinely lost something. score_identity is min(finding_count / 50,
+# 1.0), a measure of how much SpiderFoot returned rather than of how dangerous
+# the identity is: one finding scores 0.02 whether the handle belongs to nobody
+# or to a ransomware group's spokesperson. The scorer already answers UNKNOWN at
+# zero findings, and there is no principled cut point above that, so a thin
+# identity result now resolves LOW on a number that does not mean LOW. Dissent
+# is the only signal on those, and it is not a verdict.
 
 
 # Used when a result carries no thresholds of its own: anything saved before the
@@ -87,28 +91,91 @@ def score_level(result: dict) -> str:
     return score_to_risk(result.get("context_score", 0.0), thresholds_for(result))
 
 
-def extract_threat_level(summary: str) -> str | None:
-    """
-    Pulls the THREAT LEVEL verdict out of the agent's structured summary.
-    Returns HIGH, MEDIUM, LOW, UNKNOWN, or None if the line is absent.
+LEVELS = ("HIGH", "MEDIUM", "LOW", "UNKNOWN")
 
-    UNKNOWN was discarded here as unparseable, which fell back to the score. A
-    0.0 then rendered LOW, so "cannot tell" and "clean" looked identical.
+
+def _line_value(summary: str, label: str) -> str | None:
+    """
+    The text following a labelled line in the agent's structured summary, or
+    None when the line is absent. An empty string means the label was there and
+    said nothing, which is not the same as never having been written.
     """
     if not isinstance(summary, str):
         return None
     for line in summary.split("\n"):
         stripped = line.strip()
-        if not stripped.startswith("THREAT LEVEL:"):
-            continue
-        # Read the token straight after the label, not the whole line — the
-        # trailing verdict prose can contain other level words.
-        verdict = stripped[len("THREAT LEVEL:"):].strip().upper()
-        for level in ["HIGH", "MEDIUM", "LOW", "UNKNOWN"]:
-            if verdict.startswith(level):
-                return level
-        return None  # Unparseable — fall back to the score
+        if stripped.startswith(label):
+            return stripped[len(label):].strip()
     return None
+
+
+def _level_on_line(summary: str, label: str) -> str | None:
+    """
+    Reads a risk level off a labelled line.
+    Returns None when the line is absent or names no level.
+    """
+    stated = _line_value(summary, label)
+    if stated is None:
+        return None
+    # Read the token straight after the label, not the whole line — the trailing
+    # prose can contain other level words.
+    stated = stated.upper()
+    for level in LEVELS:
+        if stated.startswith(level):
+            return level
+    return None
+
+
+def extract_threat_level(summary: str) -> str | None:
+    """
+    Pulls the THREAT LEVEL line out of the agent's structured summary.
+    Returns HIGH, MEDIUM, LOW, UNKNOWN, or None if the line is absent.
+
+    core.agent now writes that line from the resolved level rather than letting
+    the model choose it, so on a current investigation this reads back the
+    engine's own verdict. It still parses saved investigations from when the
+    model wrote it, and core.render uses it to show what a stored run said.
+    """
+    return _level_on_line(summary, "THREAT LEVEL:")
+
+
+def extract_dissent(summary: str) -> str | None:
+    """
+    The level the agent's narrative would have given, when it differs from the
+    verdict it was handed. None when the agent stated no dissent.
+
+    This is the agent's whole remaining influence on the level, which is to say
+    none: it is displayed and logged so an analyst can look, and a compromised
+    site the feeds have not caught is the case it exists for. It is also anchored
+    by construction, since the prompt is told the verdict before it answers, so
+    read a dissent as a flag and never as an independent second opinion.
+    """
+    return _level_on_line(summary, "DISSENT:")
+
+
+def enforce_verdict(summary: str, verdict: str) -> str:
+    """
+    Makes the THREAT LEVEL line carry the resolved verdict, inserting the line
+    when the model left it out. Keeps whatever one-sentence verdict it wrote.
+
+    The level is decided before the summary is, so this repairs prose rather
+    than deciding anything. It exists because that line used to be the verdict:
+    raspberryhillsshop.com emitted no THREAT LEVEL line at all on one run, and a
+    reader cannot tell a level the engine stands behind from one the model
+    improvised.
+    """
+    lines = summary.split("\n")
+    for i, line in enumerate(lines):
+        if not line.strip().startswith("THREAT LEVEL:"):
+            continue
+        stated = line.strip()[len("THREAT LEVEL:"):].strip()
+        for level in LEVELS:
+            if stated.upper().startswith(level):
+                stated = stated[len(level):].lstrip(" -—:")
+                break
+        lines[i] = f"THREAT LEVEL: {verdict} — {stated}" if stated else f"THREAT LEVEL: {verdict}"
+        return "\n".join(lines)
+    return f"THREAT LEVEL: {verdict}\n\n{summary}"
 
 
 def has_evidence(result: dict) -> bool:
@@ -128,37 +195,44 @@ def has_evidence(result: dict) -> bool:
 
 def resolve_risk_level(result: dict) -> str:
     """
-    Final risk level for a completed investigation. Starts from the context
-    score; the agent's verdict overrides it unless that indicator's own scorer
-    is authoritative. UNKNOWN comes ahead of both — neither means anything
-    without inputs.
+    Final risk level for a completed investigation, and deterministic: the score
+    decides, on that indicator type's own thresholds. UNKNOWN comes first,
+    because a level means nothing without inputs.
+
+    The agent used to overrule this and the result was not reproducible. On a
+    byte-identical 0.157 dizaynholding.com drew LOW on one run and MEDIUM on the
+    next; raspberryhillsshop.com drew HIGH on one run and emitted no THREAT LEVEL
+    line at all on the next, which dropped a ThreatFox confidence-100 ClearFake
+    domain to LOW. Nothing in the engine measured that. Reading no summary is
+    what makes two runs over the same data agree.
     """
     if not has_evidence(result):
         return "UNKNOWN"
-
-    risk = score_level(result)
-    if result.get("indicator_type", "") not in SCORER_AUTHORITATIVE_TYPES:
-        agent_level = extract_threat_level(result.get("summary", ""))
-        if agent_level:
-            risk = agent_level
-    return risk
+    return score_level(result)
 
 
 def verdict_source(result: dict) -> str:
     """
-    Which input decided the level: "no_data", "agent", "scorer" or "concur".
+    How the level was reached: "no_data", "scorer", "concur" or "dissent".
 
-    "agent" means the agent's verdict actually overrode the score. When the two
-    reach the same level nothing was overridden, and labelling that an agent
-    verdict overclaimed — 13 of 34 such rows in the verdict log were agreements
-    presented as overrides.
+    The scorer decides in every case now, so this reports whether anything
+    argued with it: "concur" when the agent read the same level, "dissent" when
+    it read a different one and was not allowed to act on it, "scorer" when it
+    stated no read. The old "agent" value meant the agent had overridden the
+    score and can no longer occur.
     """
     if not has_evidence(result):
         return "no_data"
-    if result.get("indicator_type", "") in SCORER_AUTHORITATIVE_TYPES:
+
+    summary = result.get("summary", "")
+    # Absent line and a line reading "none" are different answers. A current run
+    # always writes one, so an absent line means a saved investigation from
+    # before this format or a run whose summary failed, and neither stated a
+    # read to agree or disagree with.
+    if _line_value(summary, "DISSENT:") is None:
         return "scorer"
 
-    agent_level = extract_threat_level(result.get("summary", ""))
-    if not agent_level:
-        return "scorer"
-    return "agent" if agent_level != score_level(result) else "concur"
+    dissent = extract_dissent(summary)
+    if dissent and dissent != score_level(result):
+        return "dissent"
+    return "concur"

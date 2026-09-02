@@ -23,6 +23,9 @@ venv/
 __pycache__/
 .env
 org_profile.yaml
+
+# The project brief is working notes, not documentation. It stays local.
+CLAUDE.md
 ahmia_debug.html
 .DS_Store
 test_connectors.py

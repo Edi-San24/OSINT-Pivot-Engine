@@ -3,6 +3,7 @@
 
 import requests
 from config import CENSYS_API_KEY, MAX_RESULTS_PER_SOURCE
+from connectors.retry import get_with_retry
 
 import logging
 logger = logging.getLogger(__name__)
@@ -127,55 +128,58 @@ class CensysConnector:
         """
         Queries crt.sh certificate transparency logs for a domain.
         Returns TLS certificate data and associated names.
-        Retries once on timeout before giving up.
+
+        Retries a 5xx as well as a timeout. The old retry fired only on
+        Timeout, so the frequent failure never reached it: a 502 raises
+        HTTPError from raise_for_status and went straight out the bottom.
         """
         url = f"https://crt.sh/?q={domain}&output=json"
 
-        for attempt in range(2):
-            try:
-                response = requests.get(url, timeout=45)
+        try:
+            response = get_with_retry(url, timeout=45, source="crt.sh")
 
-                if response.status_code == 404:
-                    return {
-                        "indicator": domain,
-                        "type": "domain",
-                        "source": "crt.sh",
-                        "certificate_count": 0,
-                        "certificates": [],
-                        "note": "No certificate records found."
-                    }
-
-                response.raise_for_status()
-                certs = response.json()[:5]
-
-                return {
-                    "indicator": domain,
-                    "type": "domain",
-                    "source": "crt.sh",
-                    "certificate_count": len(certs),
-                    "certificates": [
-                        {
-                            "issuer": c.get("issuer_name", "unknown"),
-                            "names": c.get("name_value", "unknown"),
-                            "not_before": c.get("not_before", "unknown"),
-                            "not_after": c.get("not_after", "unknown"),
-                        }
-                        for c in certs
-                    ]
-                }
-
-            except requests.exceptions.Timeout:
-                if attempt == 0:
-                    logger.warning(f"crt.sh timeout for {domain}, retrying...")
-                    continue
+            if response.status_code == 404:
                 return {
                     "indicator": domain,
                     "type": "domain",
                     "source": "crt.sh",
                     "certificate_count": 0,
                     "certificates": [],
-                    "note": "crt.sh timed out after 2 attempts."
+                    "note": "No certificate records found."
                 }
 
-            except requests.exceptions.RequestException as e:
-                return {"error": str(e)[:200], "indicator": domain, "source": "crt.sh"}
+            response.raise_for_status()
+            certs = response.json()[:5]
+
+            return {
+                "indicator": domain,
+                "type": "domain",
+                "source": "crt.sh",
+                "certificate_count": len(certs),
+                "certificates": [
+                    {
+                        "issuer": c.get("issuer_name", "unknown"),
+                        "names": c.get("name_value", "unknown"),
+                        "not_before": c.get("not_before", "unknown"),
+                        "not_after": c.get("not_after", "unknown"),
+                    }
+                    for c in certs
+                ]
+            }
+
+        # Carries an error key on purpose. This used to return
+        # certificate_count 0 with only a note, so an exhausted retry was
+        # indistinguishable from a domain with no certificates: it never
+        # appeared as a visibility gap, and the subdomains it failed to fetch
+        # read as subdomains that did not exist.
+        except requests.exceptions.Timeout:
+            return {
+                "error": "crt.sh timed out after 2 attempts",
+                "indicator": domain,
+                "source": "crt.sh",
+                "certificate_count": 0,
+                "certificates": [],
+            }
+
+        except requests.exceptions.RequestException as e:
+            return {"error": str(e)[:200], "indicator": domain, "source": "crt.sh"}

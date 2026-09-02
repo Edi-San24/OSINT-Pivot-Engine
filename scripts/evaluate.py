@@ -28,7 +28,7 @@ from collections import defaultdict
 
 from core.agent import run_agent
 from core.disagreement import _wilson
-from core.risk import extract_threat_level, resolve_risk_level, score_level, verdict_source
+from core.risk import extract_dissent, resolve_risk_level, score_level, verdict_source
 
 EVAL_SET = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "tests", "evaluation_set.json")
@@ -83,7 +83,7 @@ def main() -> int:
             **case,
             "score": result.get("context_score"),
             "score_level": score_level(result),
-            "agent_level": extract_threat_level(result.get("summary", "")),
+            "dissent": extract_dissent(result.get("summary", "")),
             "resolved": resolved,
             "decided_by": verdict_source(result),
             "correct": is_correct(resolved, case["truth"]),
@@ -106,18 +106,22 @@ def main() -> int:
     for truth, v in sorted(by_truth.items()):
         print(f"    {truth:10} {v['hits']}/{v['n']}  CI {_wilson(v['hits'], v['n'])}")
 
-    # The score on its own, so the agent's contribution is visible rather than
-    # assumed. Every override this has recorded so far was a correction.
-    score_only = [r for r in scored if is_correct(r["score_level"], r["truth"])]
-    overrode = [r for r in scored if r["decided_by"] == "agent"]
-    fixed = [r for r in overrode if r["correct"] and not is_correct(r["score_level"], r["truth"])]
-    broke = [r for r in overrode if not r["correct"] and is_correct(r["score_level"], r["truth"])]
-    print(f"\n  score alone      {len(score_only)}/{len(scored)}")
-    print(f"  agent overrode   {len(overrode)}/{len(scored)}  fixed {len(fixed)}, broke {len(broke)}")
-    for r in fixed:
-        print(f"     fixed  {r['indicator'][:34]:36} score said {r['score_level']}, truth {r['truth']}")
-    for r in broke:
-        print(f"     BROKE  {r['indicator'][:34]:36} score said {r['score_level']}, truth {r['truth']}")
+    # The score decides now, so the question is no longer what the agent added
+    # but what ignoring it costs. A dissent that was right is recall given up; a
+    # dissent that was wrong is the non-determinism no longer being paid for.
+    # Measure this every run: dissent is the only channel left for a compromised
+    # legitimate site, and if it never turns out right the channel is dead.
+    dissents = [r for r in scored if r["decided_by"] == "dissent"]
+    would_fix = [r for r in dissents if not r["correct"] and is_correct(r["dissent"], r["truth"])]
+    would_break = [r for r in dissents if r["correct"] and not is_correct(r["dissent"], r["truth"])]
+    print(f"\n  agent dissented  {len(dissents)}/{len(scored)}  "
+          f"would have fixed {len(would_fix)}, would have broken {len(would_break)}")
+    for r in would_fix:
+        print(f"     RECALL LOST  {r['indicator'][:32]:34} scored {r['resolved']}, "
+              f"dissent {r['dissent']}, truth {r['truth']}")
+    for r in would_break:
+        print(f"     ignored well {r['indicator'][:32]:34} scored {r['resolved']}, "
+              f"dissent {r['dissent']}, truth {r['truth']}")
 
     misses = [r for r in scored if not r["correct"]]
     if misses:

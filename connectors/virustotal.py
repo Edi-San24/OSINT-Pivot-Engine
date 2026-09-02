@@ -5,6 +5,14 @@
 import requests
 from config import VIRUSTOTAL_API_KEY, MAX_RESULTS_PER_SOURCE
 
+# Well inside core.executor.REQUEST_TIMEOUT. Three of these calls had no
+# timeout, so a stalled socket outlived the pivot: the fan-out ceiling abandons
+# the thread but cannot interrupt it, and concurrent.futures joins it at
+# interpreter shutdown. The report printed, then the CLI hung until the OS gave
+# up on the socket. Measured 30s against a 2s ceiling in a reproduction.
+REQUEST_TIMEOUT = 15
+
+
 class VirusTotalConnector:
     """
     Connector for the VirusTotal API.
@@ -27,7 +35,7 @@ class VirusTotalConnector:
         url = f"{self.BASE_URL}/ip_addresses/{ip}"
 
         try:
-            response = requests.get(url, headers=self.headers)
+            response = requests.get(url, headers=self.headers, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
 
@@ -54,7 +62,7 @@ class VirusTotalConnector:
         url = f"{self.BASE_URL}/domains/{domain}"
 
         try:
-            response = requests.get(url, headers=self.headers)
+            response = requests.get(url, headers=self.headers, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
 
@@ -81,7 +89,7 @@ class VirusTotalConnector:
         url = f"{self.BASE_URL}/files/{hash}"
 
         try:
-            response = requests.get(url, headers=self.headers)
+            response = requests.get(url, headers=self.headers, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
 
@@ -116,7 +124,7 @@ class VirusTotalConnector:
                 url,
                 headers=self.headers,
                 params={"query": f"name:{filename}", "limit": 10},
-                timeout=15
+                timeout=REQUEST_TIMEOUT,
             )
             response.raise_for_status()
             data = response.json()

@@ -40,11 +40,16 @@ from textual.widgets import (
 
 from config import ENV_PATH, PROJECT_ROOT
 from core.render import build_metrics_table, format_summary, get_risk_color
-from core.risk import resolve_risk_level
+from core.risk import extract_dissent, extract_threat_level, resolve_risk_level
 
 ACCENT = "#17375E"
 HISTORY_PATH = PROJECT_ROOT / ".tui_history.json"
 HISTORY_LIMIT = 10
+
+# MEDIUM abbreviates in the dissent position only. The sidebar leaves 38
+# columns, and the widest row this can produce, UNKNOWN>HIGH, has to fit
+# beside a readable seed.
+DISSENT_ABBREV = {"HIGH": "HIGH", "MEDIUM": "MED", "LOW": "LOW", "UNKNOWN": "UNK"}
 
 # Ten frames at a 0.1s interval gives exactly one revolution per second.
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -130,6 +135,48 @@ def save_history(entries: list) -> None:
         HISTORY_PATH.write_text(json.dumps(entries[:HISTORY_LIMIT], indent=2, default=str))
     except Exception:
         pass  # History is a convenience; never let it break an investigation.
+
+
+def entry_level(entry: dict) -> str:
+    """
+    The level a history row shows, re-derived rather than read back.
+
+    The stored risk_level is a cache of a derivation, and it went stale when the
+    verdict stopped coming from the agent: entries saved while an override was
+    possible listed one level and opened at another. The detail view already
+    re-derives, so deriving here too is what makes the two agree.
+    """
+    result = entry.get("result")
+    if not isinstance(result, dict) or "context_score" not in result:
+        # Saved before results were kept inline. The cache is all there is.
+        return entry.get("risk_level", "UNKNOWN")
+    return resolve_risk_level(result)
+
+
+def entry_agent_level(entry: dict) -> str | None:
+    """
+    What the agent read, when it differs from the row's verdict. None otherwise.
+
+    Two eras of saved entry answer this differently. A run since the verdict
+    became deterministic states its own read on a DISSENT line. An older one
+    put it on the THREAT LEVEL line, because back then that line was the
+    agent's and it was what decided the level.
+    """
+    result = entry.get("result")
+    if not isinstance(result, dict):
+        return None
+
+    summary = result.get("summary", "")
+    dissent = extract_dissent(summary)
+    if dissent:
+        return dissent
+
+    # Pre-deterministic entry: the stated level is the agent's own only when it
+    # disagrees with the score, which is exactly the override case.
+    stated = extract_threat_level(summary)
+    if stated and stated != entry_level(entry):
+        return stated
+    return None
 
 
 def discovered_indicators(result: dict) -> list[tuple[str, str]]:
@@ -388,16 +435,32 @@ class MainScreen(Screen):
         view = self.query_one("#history", ListView)
         view.clear()
         for entry in self.history[:HISTORY_LIMIT]:
-            colour = get_risk_color(entry.get("risk_level", "UNKNOWN")).replace("bold ", "")
+            level = entry_level(entry)
+            agent = entry_agent_level(entry)
+            colour = get_risk_color(level).replace("bold ", "")
             seed = entry.get("seed", "")
+
+            # The verdict, then the agent's read beside it when the two differ.
+            # Padding is measured on the plain text, since the markup around it
+            # does not occupy columns.
+            verdict = f"[{colour}]{level}[/{colour}]"
+            if agent:
+                short = DISSENT_ABBREV.get(agent, agent)
+                tint = get_risk_color(agent).replace("bold ", "")
+                plain = f"{level}>{short}"
+                verdict += f"[{tint}]>{short}[/{tint}]"
+            else:
+                plain = level
+            verdict += " " * max(1, 13 - len(plain))
+
             # One line per entry. Two-line entries clipped in a short panel and
             # cost twice the rows for information that fits on one.
-            display = seed if len(seed) <= 20 else seed[:17] + "..."
+            display = seed if len(seed) <= 15 else seed[:12] + "..."
             view.append(
                 ListItem(
                     Static(
-                        f"[{colour}]{entry.get('risk_level','?'):<7}[/{colour}]"
-                        f"{display:<21}[dim]{entry.get('when','')[-5:]}[/dim]"
+                        f"{verdict}{display:<16}"
+                        f"[dim]{entry.get('when','')[-5:]}[/dim]"
                     )
                 )
             )

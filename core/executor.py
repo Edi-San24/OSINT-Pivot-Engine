@@ -69,7 +69,12 @@ MAX_TOOLING_LOOKUPS = 5
 # knows about actors ATT&CK has not profiled. Group pivots make no VirusTotal
 # calls and run three connectors, so the extra wait is affordable here and
 # nowhere else.
-GROUP_DISCOVERY_TIMEOUT = 75
+#
+# Sized for two OTX attempts: 65s each plus a 2s backoff is 132s, and at 75s
+# the retry added for its 504s was abandoned mid-flight, which is no retry at
+# all. Nothing slows down on the happy path, since as_completed returns when
+# the batch finishes and only reaches this ceiling if a source really hangs.
+GROUP_DISCOVERY_TIMEOUT = 140
  
  
 def _run_parallel(tasks: dict, timeout: int = None) -> dict:

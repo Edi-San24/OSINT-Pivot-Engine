@@ -11,6 +11,7 @@ from rich.table import Table
 from rich.text import Text
 
 from core.risk import (
+    extract_dissent,
     extract_threat_level,
     resolve_risk_level,
     score_level,
@@ -25,6 +26,7 @@ SUMMARY_SECTIONS = {
     "KEY INDICATORS:": "bold cyan",
     "VISIBILITY GAPS:": "bold yellow",
     "RECOMMENDED ACTIONS:": "bold cyan",
+    "DISSENT:": "bold magenta",
 }
 
 # Org relevance findings, ordered by urgency. An indicator that turns out to
@@ -95,10 +97,11 @@ def build_metrics_table(result: dict, verbose: bool = False) -> Table:
     if infrastructure and infrastructure != "unknown":
         table.add_row("Infrastructure", infrastructure)
 
-    # Always say which source the level came from. Nothing was collected, the
-    # agent's verdict won, or the scorer overruled it — and that last case used
-    # to print a bare LOW next to a summary reading HIGH with no explanation.
-    agent_level = extract_threat_level(result.get("summary", ""))
+    # The score always decides the level now, so what this says is whether
+    # anything argued with it. A dissent is the only thing the agent can still
+    # raise, and it has to be visible: it is the channel for a compromised
+    # legitimate site, which the model cannot see by construction.
+    dissent = extract_dissent(result.get("summary", ""))
     decided_by = verdict_source(result)
 
     if decided_by == "no_data":
@@ -107,20 +110,32 @@ def build_metrics_table(result: dict, verbose: bool = False) -> Table:
         # The scores are real but no assessment was written. Without this the
         # level reads as a considered verdict when nothing considered it.
         label = "[Score-derived; summary unavailable]"
+    elif decided_by == "dissent":
+        label = f"[Score-derived; agent dissents, reads {dissent}]"
     elif decided_by == "concur":
-        # Two independent signals landing on the same level is worth saying, and
-        # it is not an override — which "[Agent's Verdict]" implied on 13 of the
-        # 34 runs that carried it.
-        label = "[Agent + score agree]"
-    elif decided_by == "agent":
-        label = "[Agent's Verdict]"
-    elif agent_level and agent_level != risk_level:
-        label = f"[Score-derived; agent said {agent_level}]"
+        label = "[Score-derived; agent concurs]"
     else:
-        label = ""
+        # No dissent line, so a saved investigation from before this format. Its
+        # THREAT LEVEL line was the verdict when it was written and is re-derived
+        # now, so say when the two differ rather than printing a bare LOW beside
+        # a summary whose first line reads HIGH.
+        stated = extract_threat_level(result.get("summary", ""))
+        label = (f"[Score-derived; summary states {stated}]"
+                 if stated and stated != risk_level else "[Score-derived]")
 
     suffix = f"  [dim]{label}[/dim]" if label else ""
     table.add_row("Risk Level", f"[{risk_color}]{risk_level}[/{risk_color}]{suffix}")
+
+    # Spelled out rather than left as a dim suffix. The verdict stands, and an
+    # analyst who reads past it is exactly who this is for.
+    if decided_by == "dissent":
+        table.add_row("", "")
+        table.add_row(
+            "[bold magenta]Agent dissent[/bold magenta]",
+            f"[magenta]The written assessment reads this as {dissent}, against the scored "
+            f"{risk_level}.[/magenta]\nIt does not change the verdict. Worth a look where the "
+            "score cannot see served content.",
+        )
 
     # A LOW here means the model found nothing elevated, which is not the same
     # as finding the indicator safe. One in five domains scoring LOW was
@@ -170,10 +185,13 @@ def build_metrics_table(result: dict, verbose: bool = False) -> Table:
         delta = round(context_score - ml_score, 4)
         table.add_row("[dim]Context modifier[/dim]", f"[dim]{delta:+} ({infrastructure})[/dim]")
         table.add_row("[dim]Score-derived[/dim]", f"[dim]{score_level(result)}[/dim]")
+        # What the summary says, and what it would have said. The first is the
+        # engine's own verdict written back into the prose, not a second opinion.
         table.add_row(
-            "[dim]Agent verdict[/dim]",
-            f"[dim]{extract_threat_level(result.get('summary', '')) or 'none stated'}[/dim]",
+            "[dim]Summary states[/dim]",
+            f"[dim]{extract_threat_level(result.get('summary', '')) or 'no line'}[/dim]",
         )
+        table.add_row("[dim]Agent dissent[/dim]", f"[dim]{dissent or 'none'}[/dim]")
 
     findings = result.get("findings", [])
 

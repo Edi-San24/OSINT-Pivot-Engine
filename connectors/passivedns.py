@@ -5,6 +5,14 @@
 import requests
 from config import MAX_RESULTS_PER_SOURCE
 
+# Well inside core.executor.REQUEST_TIMEOUT, so this connector reports its own
+# error rather than the fan-out reporting a generic straggler. Neither call had
+# one: the ceiling abandons the thread but cannot interrupt it, and
+# concurrent.futures joins it at interpreter shutdown, so the CLI printed its
+# report and then hung on the socket.
+REQUEST_TIMEOUT = 15
+
+
 class PassiveDNSConnector:
     """
     Connector for the PassiveDNS public API.
@@ -26,7 +34,7 @@ class PassiveDNSConnector:
         url = f"{self.BASE_URL}/{domain}"
 
         try:
-            response = requests.get(url, headers=self.headers)
+            response = requests.get(url, headers=self.headers, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
 
@@ -59,7 +67,7 @@ class PassiveDNSConnector:
         url = f"{self.BASE_URL}/{ip}"
 
         try:
-            response = requests.get(url, headers=self.headers)
+            response = requests.get(url, headers=self.headers, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
 

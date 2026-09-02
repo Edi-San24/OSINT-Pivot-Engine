@@ -4,7 +4,7 @@
 """
 Pins scoring behaviour against real pivot results with known ground truth.
 
-Two classes of regression this catches, both of which have already happened:
+Three classes of regression this catches, all of which have already happened:
 
   - A model served a feature matrix it was not fitted on. FEATURE_COLUMNS grew
     from 7 to 14 while the IP model stayed at 7, and every infrastructure score
@@ -12,6 +12,9 @@ Two classes of regression this catches, both of which have already happened:
   - A retrain that quietly starts calling legitimate businesses malicious. The
     first domain model scored a legitimate hosting provider at p=1.000 because
     its benign class was 114 household-name domains.
+  - The LLM moving the verdict. It used to overrule the score, so the same
+    investigation resolved differently on repeat runs. The verdict checks run
+    before the model gate, because determinism does not depend on a model.
 
 The fixture carries real pivot results so extract_features is exercised too, not
 just the model. Licensed source blocks are stripped from it — they never feed a
@@ -25,7 +28,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.graph_scorer import GraphScorer
-from core.risk import DOMAIN_BAND_PRECISION
+from core.risk import (
+    DOMAIN_BAND_PRECISION,
+    enforce_verdict,
+    extract_dissent,
+    extract_threat_level,
+    resolve_risk_level,
+    verdict_source,
+)
 from core.temporal_scorer import TemporalScorer
 from core.scorer import ConfidenceScorer
 
@@ -76,16 +86,114 @@ def check(condition: bool, description: str) -> None:
         failures.append(description)
 
 
+def check_verdict_is_deterministic(scorer: ConfidenceScorer) -> None:
+    """
+    Pins the one thing about the verdict that was never true before: two runs
+    over the same data reach the same level.
+
+    The agent used to overrule the score, and it is non-deterministic. On a
+    byte-identical 0.157 dizaynholding.com drew LOW on one run and MEDIUM on the
+    next; raspberryhillsshop.com drew HIGH on one run and emitted no THREAT LEVEL
+    line at all on the next. Needs no model and no quota, so it runs on a fresh
+    clone where the rest of this suite skips.
+    """
+    print("\n-- the summary cannot move the verdict --")
+    scored = {"insufficient_data": False, "pivot_count": 3, "context_score": 0.157,
+              "indicator_type": "domain", "risk_thresholds": [0.7, 0.4]}
+
+    levels = {
+        claim: resolve_risk_level({**scored, "summary": summary})
+        for claim, summary in {
+            "HIGH": "THREAT LEVEL: HIGH — bad.\n\nDISSENT: none",
+            "MEDIUM": "THREAT LEVEL: MEDIUM — unclear.\n\nDISSENT: none",
+            "UNKNOWN": "THREAT LEVEL: UNKNOWN — cannot say.\n\nDISSENT: none",
+            "no line": "ASSESSMENT:\nNothing structured came back.",
+            "dissenting": "THREAT LEVEL: LOW — quiet.\n\nDISSENT: HIGH one sentence.",
+        }.items()
+    }
+    check(set(levels.values()) == {"LOW"},
+          f"a 0.157 domain resolves LOW whatever the summary claims: {levels}")
+
+    # Absence still outranks the score, in the one direction that matters.
+    blind = {**scored, "insufficient_data": True,
+             "summary": "THREAT LEVEL: HIGH — bad.\n\nDISSENT: none"}
+    check(resolve_risk_level(blind) == "UNKNOWN",
+          f"a run that collected nothing stays UNKNOWN against a HIGH summary "
+          f"-> {resolve_risk_level(blind)}")
+
+    print("\n-- dissent is recorded, and is not a verdict --")
+    dissenting = {**scored, "summary": "THREAT LEVEL: LOW — quiet.\n\nDISSENT: HIGH served content."}
+    check(extract_dissent(dissenting["summary"]) == "HIGH",
+          f"a stated dissent is readable -> {extract_dissent(dissenting['summary'])}")
+    check(verdict_source(dissenting) == "dissent",
+          f"and is reported as dissent -> {verdict_source(dissenting)}")
+    check(resolve_risk_level(dissenting) == "LOW",
+          f"while the level stays scored -> {resolve_risk_level(dissenting)}")
+
+    concurring = {**scored, "summary": "THREAT LEVEL: LOW — quiet.\n\nDISSENT: none"}
+    check(verdict_source(concurring) == "concur",
+          f"'none' is a stated read, not a missing one -> {verdict_source(concurring)}")
+    # A saved investigation from before the dissent line stated no read at all,
+    # which is different from having agreed.
+    silent = {**scored, "summary": "THREAT LEVEL: LOW — quiet."}
+    check(verdict_source(silent) == "scorer",
+          f"an absent dissent line is not agreement -> {verdict_source(silent)}")
+
+    print("\n-- the THREAT LEVEL line is written, never parsed for the verdict --")
+    repaired = enforce_verdict("ASSESSMENT:\nNo level line was produced.", "MEDIUM")
+    check(extract_threat_level(repaired) == "MEDIUM",
+          f"a missing line is inserted -> {extract_threat_level(repaired)}")
+    overwritten = enforce_verdict("THREAT LEVEL: HIGH — looks like a phishing kit.", "LOW")
+    check(extract_threat_level(overwritten) == "LOW",
+          f"a line stating the wrong level is corrected -> {extract_threat_level(overwritten)}")
+    check("phishing kit" in overwritten,
+          "and the model's own sentence survives the correction")
+
+    # The override was carrying real recall on URLs, and it was covering a bug
+    # rather than adding judgement: score_from_evidence read urlhaus url_count,
+    # which query_url does not return, so a URL URLhaus names scored zero from
+    # URLhaus. Removing the override without this would have lost the recall.
+    print("\n-- a URL URLhaus names is HIGH from evidence alone --")
+    listed_url = scorer.score_any({
+        "indicator": "http://190.123.46.208/Okami.x86", "type": "url",
+        "results": {"urlhaus": {"found": True, "url_status": "online",
+                                "threat": "malware_download"}},
+    })
+    check(listed_url.get("risk_level") == "HIGH",
+          f"a URLhaus listing alone flags the URL it names "
+          f"(p={listed_url.get('confidence_score')})")
+
+    unlisted_url = scorer.score_any({
+        "indicator": "http://example.com/index.html", "type": "url",
+        "results": {"urlhaus": {"found": False}, "threatfox": {"found": False},
+                    "virustotal": {"malicious_votes": 0, "harmless_votes": 60},
+                    "otx": {"pulse_count": 0}},
+    })
+    check(unlisted_url.get("risk_level") == "LOW",
+          f"and a URL it does not name is not "
+          f"(p={unlisted_url.get('confidence_score')})")
+
+
 def main() -> int:
     scorer = ConfidenceScorer()
     entries = {e["indicator"]: e for e in json.load(open(FIXTURE, encoding="utf-8"))}
 
+    # Before the model gate on purpose: none of this needs a model, and the
+    # verdict has to be reproducible on a fresh clone too.
+    check_verdict_is_deterministic(scorer)
+
     if scorer.domain_gb is None:
         # Domain models are gitignored, so a fresh clone has none until it
-        # trains one. Skipping beats failing on a checkout that is fine.
-        print("SKIP: no domain model installed. Train one with:")
+        # trains one. Skipping beats failing on a checkout that is fine, but the
+        # model-free checks above still have to be able to fail.
+        print("\nSKIP: no domain model installed. Train one with:")
         print("  python core/trainer.py --dataset domain --data data/training_data_domains_v2.csv \\")
         print("      --tag v2c --exclude harmless_votes,malicious_ratio,malicious_votes,urlhaus_listed")
+        if failures:
+            print(f"\nFAILED: {len(failures)} check(s) before the model gate")
+            for f in failures:
+                print(f"  - {f}")
+            return 1
         return 0
 
     print("\n-- every indicator type scores without raising --")

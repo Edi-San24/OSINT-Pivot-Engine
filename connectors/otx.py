@@ -10,6 +10,7 @@ import logging
 logger = logging.getLogger(__name__)
  
 from config import OTX_API_KEY
+from connectors.retry import get_with_retry
  
 BASE_URL = "https://otx.alienvault.com/api/v1"
 
@@ -197,14 +198,16 @@ class OTXConnector:
         that filter discards most of what comes back.
         """
         try:
-            response = requests.get(
+            response = get_with_retry(
                 f"{BASE_URL}/search/pulses",
                 params={"q": query, "limit": limit},
                 headers=self.headers,
                 # Measured at 28-58s. Slow, but it is the only source that
                 # knows about actors ATT&CK has not profiled, and it sits
-                # inside executor.GROUP_DISCOVERY_TIMEOUT.
+                # inside executor.GROUP_DISCOVERY_TIMEOUT, which is sized for
+                # two attempts.
                 timeout=65,
+                source="otx search",
             )
             response.raise_for_status()
             data = response.json()

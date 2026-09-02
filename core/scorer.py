@@ -466,12 +466,24 @@ class ConfidenceScorer:
             }
 
         detections = vt.get("malicious_votes", 0) or 0
-        url_count = int(uh.get("url_count") or 0) if uh.get("found") else 0
         pulses = otx.get("pulse_count") or 0
+
+        # URLhaus scales an address by how many malicious URLs it carries, but a
+        # URL pivot asks query_url about the exact URL and that response has no
+        # url_count field at all. A confirmed listing therefore read as zero:
+        # http://190.123.46.208/Okami.x86 scored 0.039 LOW on a URL URLhaus
+        # names, and only the agent's override made it HIGH. A direct listing is
+        # one reported URL and earns full marks rather than a fifth of them.
+        if pivot_result.get("type") == "url":
+            url_count = 1 if uh.get("found") else 0
+            urlhaus_signal = float(url_count)
+        else:
+            url_count = int(uh.get("url_count") or 0) if uh.get("found") else 0
+            urlhaus_signal = min(url_count / self.IP_URL_FULL_MARKS, 1.0)
 
         signals = {
             "threatfox": (tf.get("max_confidence") or 0) / 100 if tf.get("found") else 0.0,
-            "urlhaus": min(url_count / self.IP_URL_FULL_MARKS, 1.0),
+            "urlhaus": urlhaus_signal,
             "virustotal": min(detections / self.IP_DETECTION_FULL_MARKS, 1.0),
             "otx": min(pulses / 5, 1.0),
         }

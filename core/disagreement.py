@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from config import DATA_DIR
 from core.risk import (
-    extract_threat_level,
+    extract_dissent,
     resolve_risk_level,
     score_level as level_from_score,
     verdict_source,
@@ -19,11 +19,16 @@ logger = logging.getLogger(__name__)
 
 LOG_PATH = os.path.join(DATA_DIR, "verdicts.jsonl")
 
-# The ML models are tracked in MLflow; the LLM that writes the actual verdict is
-# measured by nothing. Where it disagrees with the score is where the bugs turn
-# up — Moonstone Sleet scored LOW on ATT&CK coverage while the agent read HIGH
-# off four unanimous VirusTotal verdicts, and the agent was right. Logging the
-# split builds a self-labelling set to check calibration against.
+# The LLM no longer writes the verdict, so what this log measures changed with
+# it. It used to record which of two deciders won. It now records where the
+# written assessment reads the evidence differently from the score that decided,
+# which is where the bugs turn up: Moonstone Sleet scored LOW on ATT&CK coverage
+# while the agent read HIGH off four unanimous VirusTotal verdicts, and the agent
+# was right. Those rows are still the cheapest place to find a scoring blind
+# spot, and they no longer come at the cost of a reproducible verdict.
+#
+# Rows written before that change carry decided_by "agent", meaning the agent's
+# level was the one applied. They are kept as history and counted as splits.
 
 
 # Where a ground-truth label came from, because that decides what it is worth.
@@ -40,13 +45,23 @@ TRUTH_SOURCES = {"analyst", "feed", "published"}
 def _row(result: dict, truth: str | None = None, truth_source: str = "analyst") -> dict:
     """One record per investigation, enough to re-derive the decision."""
     context_score = result.get("context_score", 0.0)
-    agent_level = extract_threat_level(result.get("summary", ""))
     score_level = level_from_score(result)
     resolved = resolve_risk_level(result)
     decided_by = verdict_source(result)
 
+    # The level the written assessment read, which is no longer the level that
+    # was applied. On a dissent it named a different one; on a concur it agreed
+    # with the score. "scorer" means it stated no read at all, so there is
+    # nothing to compare.
+    if decided_by == "dissent":
+        agent_level = extract_dissent(result.get("summary", ""))
+    elif decided_by == "concur":
+        agent_level = score_level
+    else:
+        agent_level = None
+
     # Comparable only when both sides actually made a claim. A no-data run has a
-    # 0.0 that means nothing, and an agent that stated no verdict said nothing —
+    # 0.0 that means nothing, and an agent that stated no read said nothing —
     # scoring either as a disagreement would inflate the rate with noise.
     comparable = agent_level is not None and decided_by != "no_data"
 
@@ -196,12 +211,14 @@ def summarize(path: str = LOG_PATH) -> dict:
             k: {**v, "rate": round(v["correct"] / v["n"], 4)}
             for k, v in sorted(by_truth.items())
         },
-        # The interesting ones: the scorer overruled a stated agent verdict.
-        "scorer_overrode_agent": [
+        # The interesting ones: the written assessment read the evidence
+        # differently from the score that decided. "agent" is the historical
+        # spelling, from when that read was applied instead of recorded.
+        "agent_dissents": [
             {"seed": r["seed"], "type": r["indicator_type"],
              "score": r["context_score"], "score_level": r["score_level"],
              "agent_level": r["agent_level"]}
-            for r in splits if r.get("decided_by") == "scorer"
+            for r in splits if r.get("decided_by") in {"dissent", "agent"}
         ][-10:],
     }
 

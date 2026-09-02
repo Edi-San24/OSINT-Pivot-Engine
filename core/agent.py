@@ -7,7 +7,8 @@
 import json
 import logging
 import re
- 
+import time
+
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
 from langchain_anthropic import ChatAnthropic
@@ -22,7 +23,12 @@ from core.graph_scorer import GraphScorer
 from core.temporal_scorer import TemporalScorer
 from core.ner_extractor import NERExtractor
 from core.detector import detect_type
-from core.risk import NON_INFRASTRUCTURE_TYPES, DEFAULT_THRESHOLDS, resolve_risk_level
+from core.risk import (
+    NON_INFRASTRUCTURE_TYPES,
+    DEFAULT_THRESHOLDS,
+    enforce_verdict,
+    resolve_risk_level,
+)
 from core import disagreement
 
 # tier.py is local-only, like the licensed connectors it detects. A public clone
@@ -56,9 +62,16 @@ logger = logging.getLogger(__name__)
  
 # Global instances
 llm = ChatAnthropic(
-    model="claude-fable-5",
+    model="claude-fable-5-1",
     api_key=ANTHROPIC_API_KEY,
 )
+
+# The summary call returns empty content without raising, seen once in four
+# identical calls. Retried because the verdict surviving is not enough: a lost
+# summary takes the DISSENT line with it, and that is the only channel for a
+# compromised site no feed has caught yet.
+SUMMARY_ATTEMPTS = 2
+SUMMARY_BACKOFF = 1.5
  
 # Loaded once at import. None when no profile exists, which disables the layer.
 org_profile = load_profile()
@@ -182,7 +195,10 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
 
     elif indicator_type == "ipv4":
         for record in records:
-            value = record.get("ip", "")
+            # Either key: passivedns.query_ip emits "domain", DNSDB emits both.
+            # Reading only "ip" here meant an address never chained a single
+            # co-tenant, and the pivot looked like passive DNS had nothing.
+            value = record.get("domain") or record.get("ip") or ""
             if value and is_domain(value) and value not in visited:
                 new_indicators.append(value)
  
@@ -696,16 +712,24 @@ def summarize(state: AgentState) -> AgentState:
     investigation summary and context note.
     Runs NER on the generated summary to surface
     any threat actor mentions for analyst follow-up.
+
+    The threat level is resolved here, before the model is called, and handed to
+    it. The model narrates the verdict and may dissent from it in writing; it
+    does not set it.
     """
     logger.info("Agent generating final summary...")
- 
+
     findings_str = safe_json(state["findings"])
     results_str = safe_json(state["pivot_results"])
- 
+
+    # Deterministic, and computed from the same fields run_agent will use, so the
+    # summary cannot state a level the result contradicts.
+    verdict = resolve_risk_level(state)
+
     system_prompt = (
         "You are an expert cyber threat intelligence analyst reviewing OSINT pivot results.\n\n"
         "Produce a structured investigation summary using exactly this format:\n\n"
-        "THREAT LEVEL: [HIGH / MEDIUM / LOW / UNKNOWN] — [one sentence verdict]\n\n"
+        f"THREAT LEVEL: {verdict} — [one sentence verdict]\n\n"
         "ASSESSMENT:\n"
         "[2-3 sentences covering what was found and what it means. Be specific to the actual data.]\n\n"
         "KEY INDICATORS:\n"
@@ -718,10 +742,23 @@ def summarize(state: AgentState) -> AgentState:
         "1. [Specific action]\n"
         "2. [Specific action]\n"
         "3. [Specific action if applicable]\n\n"
+        "DISSENT: [none, or one of HIGH / MEDIUM / LOW / UNKNOWN — one sentence on why]\n\n"
+        f"The threat level was decided before you were called and it is {verdict}. Reproduce it "
+        "verbatim and write the rest consistently with it. You are not scoring this indicator. "
+        "The score is deterministic so that two runs over the same data reach the same verdict, "
+        "which is a property your judgement cannot offer: on identical data and a byte-identical "
+        "score this step once returned LOW on one run and MEDIUM on the next.\n\n"
+        "The DISSENT line is where your judgement belongs. Write 'none' when the evidence "
+        "supports the level. Name a different level only when the findings genuinely point "
+        "elsewhere, and say why in one sentence. The case it exists for is a legitimate site "
+        "serving attacker content: the score reads infrastructure, and there the infrastructure "
+        "is real while the maliciousness is in what is served. Dissent flags the indicator for "
+        "an analyst and does not change the verdict, so raising it costs nothing and a bare "
+        "restatement of the level costs a real signal.\n\n"
         "Write for a SOC analyst making a fast decision. Never fabricate data not in the results. "
         "If a source errored, acknowledge the gap. No markdown headers with # symbols. No bold with **.\n\n"
-        "Use UNKNOWN, not LOW, when no source returned data. LOW means checked and clean; "
-        "an empty result means we cannot see, and calling that LOW hides the gap.\n\n"
+        "UNKNOWN means no source returned data, and it is already decided above when that is the "
+        "case. LOW means checked and nothing elevated, never checked and safe.\n\n"
         "Report a failed source by what it returned, never by what you think caused it. Name "
         "the source, say which indicators it failed on, and quote the error text. Do not "
         "diagnose the cause: an SSL error is not evidence of an expired certificate, a 4xx is "
@@ -741,6 +778,7 @@ def summarize(state: AgentState) -> AgentState:
         f"Pivots run: {state['pivot_count']}\n"
         f"ML Score: {state['ml_score']}\n"
         f"Context Score: {state['context_score']}\n"
+        f"Resolved threat level: {verdict}\n"
         f"Infrastructure Type: {state['infrastructure_type']}\n"
         # Stated outright rather than left to be inferred from the scores, which
         # read as low rather than absent.
@@ -755,41 +793,56 @@ def summarize(state: AgentState) -> AgentState:
     # looking result: no error, findings present, and a score-derived risk level
     # that read as a confident verdict. The investigation is still usable — the
     # scoring layers ran — but the gap has to be visible rather than blank.
+    # Empty content counts as a failure, not as a short answer. It arrives with
+    # no exception, so retrying only on raise left the one observed failure mode
+    # unhandled.
     content = ""
-    try:
-        response = llm.invoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_message)
-        ])
-        content = response.content
-        if isinstance(content, list):
-            # Anthropic returns content blocks; pull the first text one.
-            content = next(
-                (b.get("text", "") for b in content
-                 if isinstance(b, dict) and b.get("type") == "text"),
-                "",
+    for attempt in range(SUMMARY_ATTEMPTS):
+        try:
+            response = llm.invoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_message)
+            ])
+            content = response.content
+            if isinstance(content, list):
+                # Anthropic returns content blocks, and a thinking block comes
+                # first when the model is configured for it. Every text block is
+                # joined rather than only the first, so a split response is not
+                # silently truncated to its opening section.
+                content = "".join(
+                    b.get("text", "") for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                )
+            if isinstance(content, str) and content.strip():
+                break
+            logger.warning(
+                f"Summary attempt {attempt + 1} returned empty content."
             )
-    except Exception as e:
-        logger.error(f"Summary generation failed: {str(e)[:150]}")
+        except Exception as e:
+            logger.error(
+                f"Summary attempt {attempt + 1} failed: {str(e)[:150]}"
+            )
+        if attempt < SUMMARY_ATTEMPTS - 1:
+            time.sleep(SUMMARY_BACKOFF)
 
     summary = content.strip() if isinstance(content, str) else ""
     state["summary_failed"] = not summary
 
     if not summary:
         logger.error("Summary generation returned nothing.")
-        # Deliberately carries no THREAT LEVEL line. The scores are still valid,
-        # so resolution should fall back to them rather than being forced to
-        # UNKNOWN — but the reader must not mistake this for an assessment.
+        # The level is unaffected, since it never came from here. What is missing
+        # is the writing, and the reader must not mistake the level's presence
+        # for an assessment having been made. core.render says so too.
         summary = (
             "SUMMARY UNAVAILABLE — the analyst summary could not be generated for "
             "this investigation, so no written assessment was produced.\n\n"
             f"The pivot chain itself completed: {state['pivot_count']} pivot(s) and "
-            f"{len(state['findings'])} finding(s) were collected, and the risk level "
-            "shown is derived from the score alone. Read the findings directly, and "
-            "re-run to obtain a written assessment."
+            f"{len(state['findings'])} finding(s) were collected, and the threat "
+            "level below is the scored one, unchanged. Read the findings directly, "
+            "and re-run to obtain a written assessment."
         )
 
-    state["summary"] = summary
+    state["summary"] = enforce_verdict(summary, verdict)
 
     # NER — scan summary text for threat actor mentions
     summary_pseudo_result = {"results": {"ahmia": {"results": [{"snippet": state["summary"]}]}}}
