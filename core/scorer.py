@@ -59,15 +59,13 @@ class ConfidenceScorer:
         # Only used to score hacktivist targeting overlap. Passed in rather than
         # loaded here so core.agent stays the single place the profile is read.
         self.org_profile = org_profile
-        self.gb_model, self.iso_forest = self._load_pair("")
-        if self.gb_model is None:
-            logger.error("Models not found. Run core/trainer.py first.")
 
-        # Absent on a clone, since domain models are gitignored. Domains then
-        # fall back to the IP model rather than going unscored.
+        # The only model left. Absent on a clone, since domain models are
+        # gitignored, and domains then fall back to evidence scoring rather than
+        # to the retired IP model.
         self.domain_gb, self.domain_iso = self._load_pair(f"_{DOMAIN_MODEL_TAG}_domain")
         if self.domain_gb is None:
-            logger.info("No domain model; domain indicators use the IP model.")
+            logger.info("No domain model; domains are scored from feed evidence.")
 
     @staticmethod
     def _load_pair(suffix: str) -> tuple:
@@ -97,19 +95,15 @@ class ConfidenceScorer:
  
     def score(self, pivot_result: dict) -> dict:
         """
-        ML-based scoring for infrastructure indicators — IP, domain, hash.
+        Model scoring for domains, the one indicator type with a model.
 
-        Domains are scored by their own model where one is installed. The IP
-        model reads three features from Shodan and Censys, which are IP services
-        the domain pivot never calls, so on a domain a third of its input is
-        structurally zero.
+        score_any only routes here when a domain model is installed; everything
+        else, including domains on a checkout without one, goes to
+        score_from_evidence.
         """
-        use_domain = pivot_result.get("type") == "domain" and self.domain_gb is not None
-        gb = self.domain_gb if use_domain else self.gb_model
-        iso = self.domain_iso if use_domain else self.iso_forest
-
+        gb, iso = self.domain_gb, self.domain_iso
         if not gb or not iso:
-            return {"error": "Models not loaded. Run trainer first."}
+            return {"error": "No domain model. Train one with core/trainer.py."}
 
         features = extract_features(pivot_result)
 
@@ -131,18 +125,16 @@ class ConfidenceScorer:
         # 0.67 does not mean a 67% chance of being malicious, and the base rate
         # travels with it because a precision means nothing without its prior.
         #
-        # Only the domain model has measured bands. Addresses route to score_ip
-        # now, and any other type reaching here has no measurement behind it, so
-        # it gets none rather than one borrowed from a different distribution.
+        # Measured for this model on this dataset, so it belongs only here.
+        # Addresses and URLs are scored from evidence and carry no band.
         fields = self._risk_fields(confidence_score)
-        if use_domain:
-            fields["band_precision"] = DOMAIN_BAND_PRECISION.get(fields["risk_level"])
-            fields["band_base_rate"] = BASE_RATES["domain"]
+        fields["band_precision"] = DOMAIN_BAND_PRECISION.get(fields["risk_level"])
+        fields["band_base_rate"] = BASE_RATES["domain"]
 
         return {
             "confidence_score": round(float(confidence_score), 4),
             "is_anomaly": is_anomaly,
-            "model": f"domain_{DOMAIN_MODEL_TAG}" if use_domain else "ip",
+            "model": f"domain_{DOMAIN_MODEL_TAG}",
             **fields,
             "features_used": features,
         }
@@ -361,10 +353,13 @@ class ConfidenceScorer:
     # the score could say nothing VirusTotal had not already said.
     IP_EVIDENCE_CEILINGS = {"threatfox": 0.80, "urlhaus": 0.70, "virustotal": 0.50, "otx": 0.30}
 
-    def score_ip(self, pivot_result: dict) -> dict:
+    def score_from_evidence(self, pivot_result: dict) -> dict:
         """
-        Scores an address from the evidence an IP pivot collects rather than
-        from a model.
+        Scores an indicator from feed evidence rather than from a model.
+
+        Used for addresses and URLs, and for domains on a checkout with no
+        domain model installed. The four sources below answer for all three
+        types, so one scorer covers them.
 
         The IP model it replaces never measured what it claimed to. Its benign
         class was built by resolving domains, so every benign row had domains
@@ -551,9 +546,10 @@ class ConfidenceScorer:
           threat_group -> score_threat_group (MITRE ATT&CK coverage)
           software     -> score_software     (MalwareBazaar sample volume)
           hash         -> score_hash         (detections, catalogue, ATT&CK)
-          ipv4         -> score_ip           (ThreatFox, URLhaus, VT, OTX)
+          ipv4/url     -> score_from_evidence (ThreatFox, URLhaus, VT, OTX)
           email/username/filename -> score_identity (SpiderFoot findings)
-          domain/other            -> score (ML model, infrastructure features)
+          domain                  -> score (ML model), or score_from_evidence
+                                     when no domain model is installed
         """
         indicator_type = pivot_result.get("type", "")
 
@@ -563,10 +559,14 @@ class ConfidenceScorer:
             return self.score_software(pivot_result)
         elif indicator_type == "hash":
             return self.score_hash(pivot_result)
-        elif indicator_type == "ipv4":
-            return self.score_ip(pivot_result)
         elif indicator_type in {"email", "username", "filename"}:
             return self.score_identity(pivot_result)
-        else:
+        elif indicator_type == "domain" and self.domain_gb is not None:
             return self.score(pivot_result)
+        # Addresses, URLs, and domains on a checkout without the domain model.
+        # That last case is every fresh clone, since domain models are
+        # gitignored, and it used to fall through to the IP model — which was
+        # retired precisely because it had learned to tell a busy server from a
+        # quiet one.
+        return self.score_from_evidence(pivot_result)
  

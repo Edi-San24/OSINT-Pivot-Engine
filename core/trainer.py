@@ -24,7 +24,6 @@ DOMAIN_TRAINING_DATA_PATH = os.path.join(DATA_DIR, "training_data_domains.csv")
 def load_training_data(path: str = None) -> tuple:
     """
     Loads real labeled training data from CSV.
-    Falls back to synthetic data if CSV not found.
 
     Columns absent from the file are filled with zeros rather than raising, so a
     dataset collected before a feature existed still loads.
@@ -41,53 +40,16 @@ def load_training_data(path: str = None) -> tuple:
         y = df["label"].values
         print(f"[+] Loaded {len(df)} samples. Malicious: {sum(y)} | Benign: {len(y) - sum(y)}")
         return X, y
-    else:
-        print("[!] No real training data found. Falling back to synthetic data.")
-        return generate_training_data()
-
-def generate_training_data() -> tuple:
-    """
-    Generates synthetic training data based on
-    known malicious and benign infrastructure patterns.
-    Returns features DataFrame and labels array.
-    """
-    benign_samples = []
-    malicious_samples = []
-
-    # Benign infrastructure patterns
-    for _ in range(200):
-        benign_samples.append({
-            "malicious_votes": np.random.randint(0, 12),
-            "harmless_votes": np.random.randint(10, 70),
-            "malicious_ratio": np.random.uniform(0.0, 0.35),
-            "shodan_blocked": np.random.choice([0, 1], p=[0.5, 0.5]),
-            "dns_record_count": np.random.randint(0, 15),
-            "total_open_ports": np.random.randint(0, 10),
-            "high_risk_country": np.random.choice([0, 1], p=[0.6, 0.4]),
-        })
-
-    # Malicious infrastructure patterns
-    for _ in range(200):
-        malicious_samples.append({
-            "malicious_votes": np.random.randint(0, 25),
-            "harmless_votes": np.random.randint(0, 60),
-            "malicious_ratio": np.random.uniform(0.0, 1.0),
-            "shodan_blocked": np.random.choice([0, 1], p=[0.4, 0.6]),
-            "dns_record_count": np.random.randint(0, 15),
-            "total_open_ports": np.random.randint(0, 10),
-            "high_risk_country": np.random.choice([0, 1], p=[0.35, 0.65]),
-        })
-
-    benign_df = pd.DataFrame(benign_samples)
-    malicious_df = pd.DataFrame(malicious_samples)
-
-    X = pd.concat([benign_df, malicious_df], ignore_index=True)
-    y = np.array([0] * 200 + [1] * 200)
-
-    return X, y
+    # No synthetic fallback. It existed to keep the trainer runnable before any
+    # data was collected, and it silently produced a model fitted to invented
+    # numbers that looked exactly like a real one on disk.
+    raise FileNotFoundError(
+        f"No training data at {path}. Collect some with "
+        "scripts/collect_training_data.py, or pass --data."
+    )
 
 def train_models(
-    dataset: str = "ip",
+    dataset: str = "domain",
     exclude: list | None = None,
     tag: str = "",
     data_path: str | None = None,
@@ -96,11 +58,9 @@ def train_models(
     Trains Isolation Forest and Gradient Boosting models.
     Logs all experiments and registers models with MLflow.
 
-    dataset="domain" trains on the domain set and writes to its own model files.
-    Domain and IP rows are not interchangeable: Shodan and Censys are IP
-    services the domain pivot never calls, so their features are zero on every
-    domain row. Training on one and serving the other loses a third of the
-    learned signal, which is what the live engine was doing.
+    Domains are the only type with a model. Addresses, URLs and hashes are
+    scored from feed evidence by ConfidenceScorer, so nothing loads a model
+    trained on them.
 
     exclude drops named features before fitting, for comparing variants on one
     dataset. tag keeps each variant in its own model files — placed before
@@ -206,7 +166,10 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Train the scoring models.")
-    parser.add_argument("--dataset", choices=("ip", "domain"), default="ip")
+    # Only domains have a model. Addresses, URLs and hashes are scored from feed
+    # evidence by ConfidenceScorer, so training an IP model produces something
+    # nothing loads.
+    parser.add_argument("--dataset", choices=("domain",), default="domain")
     parser.add_argument(
         "--exclude", default="",
         help="Comma-separated features to drop before fitting.",
