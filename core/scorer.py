@@ -110,6 +110,26 @@ class ConfidenceScorer:
         import pandas as pd
         row = pd.DataFrame([features])
 
+        # A feature vector of all zeros means no source answered, not that the
+        # indicator looks suspicious. The two are indistinguishable to the model
+        # and it resolves them the wrong way: an unregistered domain scored
+        # 0.7507 HIGH, because a domain with no registration date, no
+        # nameservers and no MX has the same vector as one registered today.
+        #
+        # domain_age_known was added to carry that distinction and cannot, since
+        # the model gives it an importance of 0.002. The guard belongs here
+        # rather than in a feature.
+        trained = list(gb.feature_names_in_)
+        if not any(float(features.get(column, 0) or 0) for column in trained):
+            return {
+                "confidence_score": 0.0,
+                "is_anomaly": False,
+                "risk_level": "UNKNOWN",
+                "model": f"domain_{DOMAIN_MODEL_TAG}",
+                "note": "No source returned data for this indicator.",
+                "features_used": features,
+            }
+
         # Columns come from each model rather than from FEATURE_COLUMNS. The two
         # drifted when FEATURE_COLUMNS grew to 14 while the IP model stayed at
         # the 7 it was fitted on, and every infrastructure score raised
@@ -375,6 +395,24 @@ class ConfidenceScorer:
         every address published from this engine landed in the MEDIUM band, at
         0.95x the base rate, which is no information at all.
         """
+        # Reserved, private and documentation space cannot host anything, so
+        # "checked, nothing found" misdescribes it. 192.0.2.55 is RFC 5737
+        # documentation space and was reporting LOW, which reads as a clean bill
+        # of health for an address that is not routable at all.
+        indicator = (pivot_result.get("indicator") or "").strip()
+        if pivot_result.get("type") == "ipv4":
+            try:
+                import ipaddress
+                if not ipaddress.ip_address(indicator).is_global:
+                    return {
+                        "confidence_score": 0.0,
+                        "is_anomaly": False,
+                        "risk_level": "UNKNOWN",
+                        "note": "Not a globally routable address (reserved, private or documentation space).",
+                    }
+            except ValueError:
+                pass
+
         results = pivot_result.get("results", {})
         tf = results.get("threatfox", {}) or {}
         uh = results.get("urlhaus", {}) or {}

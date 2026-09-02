@@ -167,7 +167,7 @@ def main() -> int:
     # URLhaus answered "not found", and URLhaus tracks malware URLs rather than
     # C2 addresses, so its silence about one says nothing.
     quiet = scorer.score_any({
-        "indicator": "192.0.2.10", "type": "ipv4",
+        "indicator": "45.33.8.196", "type": "ipv4",
         "results": {"threatfox": {"found": True, "max_confidence": 100},
                     "urlhaus": {"found": False},
                     "virustotal": {"malicious_votes": 0, "harmless_votes": 60},
@@ -177,8 +177,34 @@ def main() -> int:
           f"a confidence-100 listing stays HIGH when other sources are quiet "
           f"(p={quiet.get('confidence_score')})")
 
+    # Absence must not read as a verdict, in either direction. An unregistered
+    # domain produces an all-zero feature vector, which the model resolved as
+    # 0.7507 HIGH because it is indistinguishable from a domain registered
+    # today. Reserved space cannot host anything, so "checked, nothing found"
+    # misdescribes it.
+    print("\n-- absence is reported as absence, not as a verdict --")
+    nothing = scorer.score_any({
+        "indicator": "does-not-exist-abc987xyz.example", "type": "domain",
+        "results": {"whois": {"creation_date": "unknown"}, "dns": {},
+                    "virustotal": {"malicious_votes": 0, "harmless_votes": 0},
+                    "threatfox": {"found": False}, "urlhaus": {"found": False},
+                    "passivedns": {"record_count": 0}},
+    })
+    check(nothing.get("risk_level") == "UNKNOWN",
+          f"a domain with an all-zero feature vector -> {nothing.get('risk_level')} "
+          f"(p={nothing.get('confidence_score')})")
+
+    reserved = scorer.score_any({
+        "indicator": "192.0.2.55", "type": "ipv4",
+        "results": {"threatfox": {"found": False}, "urlhaus": {"found": False},
+                    "virustotal": {"malicious_votes": 0, "harmless_votes": 0},
+                    "otx": {"pulse_count": 0}},
+    })
+    check(reserved.get("risk_level") == "UNKNOWN",
+          f"RFC 5737 documentation space -> {reserved.get('risk_level')}")
+
     silent = scorer.score_any({
-        "indicator": "192.0.2.11", "type": "ipv4",
+        "indicator": "45.33.8.197", "type": "ipv4",
         "results": {"threatfox": {"error": "x"}, "urlhaus": {"error": "x"},
                     "virustotal": {"error": "x"}, "otx": {"error": "x"}},
     })
