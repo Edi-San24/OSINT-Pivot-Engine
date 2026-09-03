@@ -61,9 +61,15 @@ logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
  
 # Global instances
+# The timeout is not optional. Unbounded, a stalled summary call wedges the
+# whole run: a 33-case evaluate.py sat 3 hours on one ESTABLISHED socket having
+# finished 6 cases. SUMMARY_ATTEMPTS below cannot help, since a call that never
+# returns never raises either.
 llm = ChatAnthropic(
     model="claude-fable-5-1",
     api_key=ANTHROPIC_API_KEY,
+    timeout=90,
+    max_retries=1,
 )
 
 # The summary call returns empty content without raising, seen once in four
