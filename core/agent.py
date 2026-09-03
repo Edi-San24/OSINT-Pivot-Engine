@@ -128,6 +128,32 @@ def is_domain(value: str) -> bool:
     ))
  
  
+# Blocks that go in the prompt carrying nothing the prompt can use. DNSDB
+# returns its raw API shape as "rrsets" alongside the normalized "records", and
+# they are the same data: nothing in the engine reads rrsets, so sending both
+# spent 2,072 of 12,552 input tokens on a duplicate.
+PROMPT_DROP_KEYS = {"rrsets"}
+
+
+def prune_for_prompt(pivot_results: list) -> list:
+    """
+    Drops redundant blocks from the results on their way into the prompt.
+
+    The prompt copy only. A saved investigation keeps everything, since a
+    reader may want the raw shape even where the summary cannot use it.
+    """
+    pruned = []
+    for pivot in pivot_results:
+        results = {}
+        for name, payload in (pivot.get("results") or {}).items():
+            if isinstance(payload, dict):
+                payload = {k: v for k, v in payload.items()
+                           if k not in PROMPT_DROP_KEYS}
+            results[name] = payload
+        pruned.append({**pivot, "results": results})
+    return pruned
+
+
 def safe_json(obj: object, limit: int = 0) -> str:
     """Serializes an object to JSON string with optional character limit."""
     result = json.dumps(obj, indent=2, default=str)
@@ -746,7 +772,7 @@ def summarize(state: AgentState) -> AgentState:
     logger.info("Agent generating final summary...")
 
     findings_str = safe_json(state["findings"])
-    results_str = safe_json(state["pivot_results"])
+    results_str = safe_json(prune_for_prompt(state["pivot_results"]))
 
     # Deterministic, and computed from the same fields run_agent will use, so the
     # summary cannot state a level the result contradicts.
@@ -826,7 +852,17 @@ def summarize(state: AgentState) -> AgentState:
     for attempt in range(SUMMARY_ATTEMPTS):
         try:
             response = llm.invoke([
-                SystemMessage(content=system_prompt),
+                SystemMessage(content=[{
+                    "type": "text",
+                    "text": system_prompt,
+                    # The only content identical between investigations. Caching
+                    # is a prefix match and everything after it is unique per
+                    # run, so this breakpoint is the whole opportunity: measured
+                    # at 953 of 12,552 input tokens on a 3-pivot domain, which
+                    # is 7.6%. Hits only when runs land inside the 5 minute TTL,
+                    # so an evaluate.py sweep benefits and a lone pivot does not.
+                    "cache_control": {"type": "ephemeral"},
+                }]),
                 HumanMessage(content=user_message)
             ])
             content = response.content
