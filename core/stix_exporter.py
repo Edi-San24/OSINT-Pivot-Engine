@@ -8,6 +8,8 @@ import re
 import time
 from datetime import datetime, timezone
 
+from core.risk import is_routable_ip
+
 logger = logging.getLogger(__name__)
 
 from stix2 import (
@@ -350,6 +352,30 @@ def _co_hosted_tenants(pivot: dict, investigated_domains: set[str]) -> list[str]
     return protected
 
 
+def _feed_listed(pivot: dict) -> str:
+    """
+    Whether a feed lists this indicator itself, named so the audit can say so.
+
+    Read from the saved pivot rather than queried, so it costs nothing and
+    reflects what the investigation actually saw. Distinct from
+    _is_known_malicious, which asks the same question about a neighbour.
+    """
+    results = pivot.get("results") or {}
+
+    threatfox = results.get("threatfox") or {}
+    if threatfox.get("found"):
+        confidence = threatfox.get("max_confidence")
+        families = ", ".join(threatfox.get("malware_families") or [])
+        detail = f" at confidence {confidence}" if confidence is not None else ""
+        return f"ThreatFox{detail}{f' ({families})' if families else ''}"
+
+    urlhaus = results.get("urlhaus") or {}
+    if urlhaus.get("found"):
+        return "URLhaus"
+
+    return ""
+
+
 def _engine_artifacts(investigation: dict) -> set[str]:
     """
     Names the engine invented or read off the hosting provider.
@@ -424,26 +450,49 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
         itype = pivot.get("type", "")
 
         if itype == "ipv4":
-            tenants = _co_hosted_tenants(pivot, domains)
-            if tenants is None:
+            # Reserved, private, multicast and documentation space cannot host
+            # anything, so it cannot be an indicator. shiabank.com poisons
+            # passive DNS with randomised junk and this layer offered three of
+            # its 0.x addresses for publication at engine: HIGH.
+            if not is_routable_ip(name):
                 excluded.append({
                     "indicator": name,
                     "reason": (
-                        "tenancy unknown — no passive DNS coverage on this address, "
-                        "so whether it is shared cannot be established"
+                        "not a globally routable address (reserved, private, "
+                        "multicast or documentation space), so it cannot host"
                     ),
                 })
                 continue
-            if tenants:
-                excluded.append({
-                    "indicator": name,
-                    "reason": (
-                        f"shared hosting — {len(tenants)} unrelated domain(s) on this "
-                        f"address, blocking it would hit bystanders"
-                    ),
-                    "co_hosted": tenants[:10],
-                })
-                continue
+
+            # Feed evidence on the address itself outranks the co-tenancy
+            # heuristic, and this ordering is load-bearing. On a compromised
+            # host, co-tenancy with a legitimate domain is the definition of the
+            # case rather than a reason to shield the address: 178.62.3.223, a
+            # Cobalt Strike C2 that ThreatFox holds at confidence 90 with 50
+            # corroborating honeypot pulses, was suppressed as "shared hosting"
+            # while the victim's own four domains were offered for publication.
+            listed = _feed_listed(pivot)
+            if not listed:
+                tenants = _co_hosted_tenants(pivot, domains)
+                if tenants is None:
+                    excluded.append({
+                        "indicator": name,
+                        "reason": (
+                            "tenancy unknown — no passive DNS coverage on this address, "
+                            "so whether it is shared cannot be established"
+                        ),
+                    })
+                    continue
+                if tenants:
+                    excluded.append({
+                        "indicator": name,
+                        "reason": (
+                            f"shared hosting — {len(tenants)} unrelated domain(s) on this "
+                            f"address, blocking it would hit bystanders"
+                        ),
+                        "co_hosted": tenants[:10],
+                    })
+                    continue
 
         # A name sitting under another published domain is a hostname to OTX.
         others = domains - {name}

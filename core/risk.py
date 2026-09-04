@@ -3,6 +3,8 @@
 # Imported by both the CLI (main.py) and the MCP server (mcp_server.py) so the
 # two front ends can never disagree about the same indicator.
 
+import ipaddress
+
 
 # Types the graph and temporal layers do not apply to, so core.agent blends them
 # by chained evidence instead.
@@ -60,6 +62,28 @@ DOMAIN_BAND_PRECISION = {"HIGH": 0.89, "MEDIUM": 0.43, "LOW": 0.20}
 # had learned to tell a mature multi-service host from a minimal one.
 
 BASE_RATES = {"domain": 0.504}
+
+
+def is_routable_ip(value: str) -> bool:
+    """
+    Whether an address can actually host anything.
+
+    False for reserved, private, multicast, loopback and documentation space,
+    and for anything that is not an address at all. `scorer` has guarded this
+    since the RFC 5737 fix, but only at scoring time, and two layers upstream
+    were spending real work on space that cannot host: shiabank.com poisons
+    passive DNS with randomised junk and burned 3 of its 5 pivots on 0.x
+    addresses, and the same records were offered for publication as
+    HIGH-confidence indicators.
+    """
+    try:
+        address = ipaddress.ip_address(value.strip())
+    except ValueError:
+        return False
+    # is_global alone lets multicast through, because Python defines it as the
+    # complement of private and 224.0.0.0/4 is in neither list. 230.128.42.66
+    # came out of the poisoned zone and would have passed.
+    return address.is_global and not address.is_multicast and not address.is_reserved
 
 
 def score_to_risk(score: float, thresholds: tuple = DEFAULT_THRESHOLDS) -> str:

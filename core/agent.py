@@ -27,6 +27,7 @@ from core.risk import (
     NON_INFRASTRUCTURE_TYPES,
     DEFAULT_THRESHOLDS,
     enforce_verdict,
+    is_routable_ip,
     resolve_risk_level,
 )
 from core import disagreement
@@ -124,7 +125,17 @@ class AgentState(TypedDict):
  
  
 def is_ipv4(value: str) -> bool:
-    return bool(re.match(r"^(\d{1,3}\.){3}\d{1,3}$", value))
+    """
+    A dotted quad that is worth spending a pivot on.
+
+    Routability is part of the question here, not a separate check. The shape
+    test alone let shiabank.com spend 3 of its 5 pivots on 0.x addresses it had
+    published to poison passive DNS, so the chain reached one real host instead
+    of four.
+    """
+    if not re.match(r"^(\d{1,3}\.){3}\d{1,3}$", value):
+        return False
+    return is_routable_ip(value)
  
  
 def is_domain(value: str) -> bool:
