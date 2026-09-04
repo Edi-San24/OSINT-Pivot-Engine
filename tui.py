@@ -34,8 +34,8 @@ from textual.widgets import (
     ListView,
     RichLog,
     Select,
+    Checkbox,
     Static,
-    Switch,
 )
 
 from config import ENV_PATH, PROJECT_ROOT
@@ -402,18 +402,13 @@ class MainScreen(Screen):
                         allow_blank=False,
                         id="depth",
                     )
-                    with Horizontal(classes="toggle-row"):
-                        yield Switch(id="deep")
-                        yield Label("Deep scan  [dim](SpiderFoot)[/dim]")
-                    with Horizontal(classes="toggle-row"):
-                        yield Switch(id="stix")
-                        yield Label("Export STIX 2.1")
-                    with Horizontal(classes="toggle-row"):
-                        yield Switch(id="save-json")
-                        yield Label("Save full JSON")
-                    with Horizontal(classes="toggle-row"):
-                        yield Switch(id="verbose")
-                        yield Label("Show derivation")
+                    # Checkbox rather than Switch: the glyph and its label are
+                    # one widget on one row, and an X reads unambiguously where
+                    # a borderless slider does not say which end is set.
+                    yield Checkbox("Deep scan (SpiderFoot)", id="deep")
+                    yield Checkbox("Export STIX 2.1", id="stix")
+                    yield Checkbox("Save full JSON", id="save-json")
+                    yield Checkbox("Show derivation", id="verbose")
                     yield Button("Run investigation", variant="primary", id="run")
                     yield Static("", id="status")
                 with Vertical(id="history-panel"):
@@ -504,7 +499,7 @@ class MainScreen(Screen):
             return
 
         depth = self.query_one("#depth", Select).value
-        deep = self.query_one("#deep", Switch).value
+        deep = self.query_one("#deep", Checkbox).value
 
         self.started_at = time.monotonic()
         self._ticks = 0
@@ -576,18 +571,18 @@ class MainScreen(Screen):
         safe = "".join(c if c.isalnum() or c in "-._" else "_" for c in seed)[:60]
         log = self.query_one("#results", RichLog)
 
-        if self.query_one("#save-json", Switch).value:
+        if self.query_one("#save-json", Checkbox).value:
             path = PROJECT_ROOT / f"{safe}_results.json"
             path.write_text(json.dumps(result, indent=2, default=str))
             log.write(Text(f"Saved {path.name}", style="green"))
 
-        if self.query_one("#stix", Switch).value:
+        if self.query_one("#stix", Checkbox).value:
             from core.stix_exporter import STIXExporter
             path = STIXExporter().export(result, str(PROJECT_ROOT / f"{safe}_stix.json"))
             log.write(Text(f"STIX bundle: {Path(path).name}" if path
                            else "STIX export failed", style="green" if path else "red"))
 
-    @on(Switch.Changed, "#verbose")
+    @on(Checkbox.Changed, "#verbose")
     def _toggle_derivation(self) -> None:
         """Re-render the result in place so verbose can be decided after the fact."""
         if self.current_result is not None:
@@ -600,7 +595,7 @@ class MainScreen(Screen):
             log.clear()
 
         risk = resolve_risk_level(result)
-        log.write(build_metrics_table(result, verbose=self.query_one("#verbose", Switch).value))
+        log.write(build_metrics_table(result, verbose=self.query_one("#verbose", Checkbox).value))
         log.write(
             Panel(
                 Group(format_summary(result.get("summary", ""))),
@@ -701,15 +696,24 @@ class OsintPivotTUI(App):
     #seed:focus {{ border: tall {GLOW}; }}
     #depth {{ margin-bottom: 1; }}
 
-    /* One row per toggle instead of three. Textual's Switch is height 3 by
-       default because of its border, and four of them cost twelve rows of a
-       thirty-five row sidebar, which is what starved the Recent panel down to
-       a single visible entry. */
-    .toggle-row {{ height: 1; margin-bottom: 1; }}
-    .toggle-row Label {{ padding-left: 1; }}
-    Switch {{ height: 1; border: none; background: #0b1220; }}
-    Switch:focus {{ background: {BORDER}; }}
-    Switch.-on > .switch--slider {{ color: {GLOW}; }}
+    /* One row per toggle instead of three. A Switch is height 3 for its
+       border, and four cost twelve rows of a thirty-five row sidebar, which
+       starved the Recent panel to one visible entry. Stripping the border to
+       reclaim them left the slider with no track, so on and off both read as a
+       filled block; a Checkbox carries its own glyph and does not. */
+    Checkbox {{
+        height: 1;
+        border: none;
+        background: transparent;
+        padding: 0;
+        margin-bottom: 1;
+    }}
+    Checkbox:focus {{ background: {ACCENT}; }}
+    /* Only the checked state is coloured. Textual hides the unchecked glyph by
+       drawing it in the button's own background colour, so setting the colour
+       unconditionally made every box render a permanent X. */
+    Checkbox > .toggle--button {{ background: #0b1220; }}
+    Checkbox.-on > .toggle--button {{ color: {GLOW}; background: #0b1220; }}
 
     #run {{ width: 100%; margin-top: 1; background: {ACCENT}; color: white; }}
     #run:hover {{ background: {BORDER}; }}
