@@ -31,6 +31,7 @@ from core.detector import detect_type
 from core.agent import extract_findings
 from core.executor import PivotExecutor
 from core.graph_scorer import GraphScorer
+from core.stix_exporter import select_indicators
 from core.risk import (
     DOMAIN_BAND_PRECISION,
     enforce_verdict,
@@ -87,6 +88,75 @@ def check(condition: bool, description: str) -> None:
     print(f"  {'PASS' if condition else 'FAIL'}  {description}")
     if not condition:
         failures.append(description)
+
+
+def check_publication_gate(entries: dict) -> None:
+    """
+    A domain the chain discovered needs a source other than our own model
+    before it reaches a pulse. The seed does not.
+
+    Both halves of this are load-bearing and they pull opposite ways. Four
+    co-tenants of a compromised mail host scored up to 0.9591 on VT 0/56 with
+    nothing else listing them, and publishing them would have named a real firm
+    as running a Cobalt Strike C2. But briansclub.cm is a confirmed carding
+    marketplace at 0.963 with no feed, no detection and no pulse anywhere,
+    which is the model beating every source at once. The seed exemption is what
+    lets the second publish while the first does not.
+    """
+    print("\n-- an uncorroborated domain publishes only as the seed --")
+
+    briansclub = entries.get("briansclub.cm")
+    if not briansclub:
+        check(False, "briansclub.cm missing from the fixture")
+        return
+
+    as_seed = {"indicator": "briansclub.cm", "risk_level": "HIGH",
+               "visited": ["briansclub.cm"], "full_results": [briansclub]}
+    included, _ = select_indicators([as_seed])
+    check([i["indicator"] for i in included] == ["briansclub.cm"],
+          f"the seed publishes with no corroboration at all -> "
+          f"{[i['indicator'] for i in included]}")
+
+    chained = {
+        "indicator": "1.2.3.4", "risk_level": "HIGH",
+        "visited": ["1.2.3.4", "briansclub.cm"],
+        "full_results": [
+            {"indicator": "1.2.3.4", "type": "ipv4",
+             "results": {"threatfox": {"found": True, "max_confidence": 90},
+                         "passivedns": {"records": []}}},
+            briansclub,
+        ],
+    }
+    included, excluded = select_indicators([chained])
+    names = [i["indicator"] for i in included]
+    dropped = {e["indicator"]: e["reason"] for e in excluded}
+    check("briansclub.cm" not in names and "briansclub.cm" in dropped,
+          "the same domain reached by chaining does not")
+    check("uncorroborated" in dropped.get("briansclub.cm", ""),
+          "and the audit says why, so --include is an informed decision")
+
+    # A certificate only selects for its own domain, so it cannot outlive it.
+    with_cert = {
+        "indicator": "1.2.3.4", "risk_level": "HIGH",
+        "visited": ["1.2.3.4", "quiet.example"],
+        "full_results": [
+            {"indicator": "1.2.3.4", "type": "ipv4",
+             "results": {"threatfox": {"found": True, "max_confidence": 90},
+                         "passivedns": {"records": []}}},
+            {"indicator": "quiet.example", "type": "domain",
+             "results": {"virustotal": {"malicious_votes": 0, "harmless_votes": 56},
+                         "threatfox": {"found": False}, "urlhaus": {"found": False},
+                         "otx": {"pulse_count": 0},
+                         "domaintools": {"certificates": [
+                             {"sha1": "a" * 40, "domains_on_cert": 1}]}}},
+        ],
+    }
+    included, excluded = select_indicators([with_cert])
+    dropped = {e["indicator"]: e["reason"] for e in excluded}
+    check("a" * 40 not in [i["indicator"] for i in included],
+          "an unpublished domain's certificate is not published either")
+    check("quiet.example" in dropped.get("a" * 40, ""),
+          f"and names the domain it belongs to -> {dropped.get('a' * 40, '')[:52]}")
 
 
 def check_seed_formats() -> None:
@@ -250,6 +320,7 @@ def main() -> int:
     # verdict has to be reproducible on a fresh clone too.
     check_verdict_is_deterministic(scorer)
     check_seed_formats()
+    check_publication_gate(entries)
 
     if scorer.domain_gb is None:
         # Domain models are gitignored, so a fresh clone has none until it

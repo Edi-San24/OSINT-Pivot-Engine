@@ -350,6 +350,39 @@ def _feed_listed(pivot: dict) -> str:
     return ""
 
 
+def _corroboration(pivot: dict) -> str:
+    """
+    Any independent source saying something about this indicator, named so the
+    audit can quote it. Empty string when nothing does.
+
+    Deliberately broader than _feed_listed, which stays narrow because it
+    overrides bystander protection and needs abuse.ch-grade evidence. This one
+    only decides whether a discovered domain may be published, so a VirusTotal
+    detection or a community pulse is enough.
+    """
+    results = pivot.get("results") or {}
+
+    threatfox = results.get("threatfox") or {}
+    if threatfox.get("found"):
+        return f"ThreatFox at confidence {threatfox.get('max_confidence')}"
+
+    if (results.get("urlhaus") or {}).get("found"):
+        return "URLhaus"
+
+    votes = (results.get("virustotal") or {}).get("malicious_votes") or 0
+    if votes:
+        harmless = (results.get("virustotal") or {}).get("harmless_votes") or 0
+        return f"VirusTotal {votes}/{votes + harmless}"
+
+    # pulse_count already excludes our own pulses, so this cannot corroborate
+    # a domain using a pulse we published about it earlier.
+    otx = results.get("otx") or {}
+    if (otx.get("pulse_count") or 0) > 0:
+        return f"{otx['pulse_count']} OTX pulse(s)"
+
+    return ""
+
+
 def _engine_artifacts(investigation: dict) -> set[str]:
     """
     Names the engine invented or read off the hosting provider.
@@ -471,6 +504,37 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
         # A name sitting under another published domain is a hostname to OTX.
         others = domains - {name}
         resolved = "hostname" if (itype == "domain" and _is_under(name, others)) else itype
+
+        # A domain the chain discovered needs a source other than our own model
+        # before it goes in a pulse. The seed is exempt: the analyst chose to
+        # investigate it, so publishing it is their claim rather than the
+        # engine's inference.
+        #
+        # This is the rule that would have stopped the nautadb pulse. Four
+        # co-tenants of a compromised mail host scored up to 0.9591 on VT 0/56
+        # with nothing else listing them, purely because an eight-year-old
+        # self-hosted mail box looks like minimal attacker infrastructure to the
+        # model, and the pulse would have named a real firm as running a Cobalt
+        # Strike C2. Not a hard block, because briansclub.cm is the mirror case:
+        # a confirmed carding marketplace at 0.963 with no feed, no VirusTotal
+        # detection and no pulse anywhere, which is the model's best moment. It
+        # is the seed of its own investigation and so publishes; a discovered
+        # domain lands in the audit with this reason and --include publishes it
+        # once someone has decided to.
+        is_seed = name == (investigation.get("indicator") or "").strip().lower()
+        if resolved in ("domain", "hostname") and not is_seed:
+            corroboration = _corroboration(pivot)
+            if not corroboration:
+                excluded.append({
+                    "indicator": name,
+                    "reason": (
+                        "discovered by chaining and uncorroborated — no feed lists "
+                        "it, VirusTotal is clean and no pulse names it, so "
+                        "publishing would rest on the model alone"
+                    ),
+                })
+                continue
+
         included.append({
             "indicator": original,
             "type": OTX_TYPES.get(resolved, resolved),
@@ -481,16 +545,33 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
     # selector — other analysts can hunt it directly. One shared across many
     # domains is a hosting artifact and says nothing, so the corpus count from
     # DomainTools decides which is which.
+    #
+    # A certificate is only a selector for the domain it belongs to, so it
+    # cannot be publishable when that domain is not. Without this the nautadb
+    # pulse still shipped three of the victim's Let's Encrypt fingerprints after
+    # the four domains had been excluded, which fingerprints the victim just as
+    # precisely as naming them would.
+    publishable = {entry["indicator"].strip().lower() for entry in included}
     for investigation in investigations:
         for pivot in investigation.get("full_results", []):
             dt = (pivot.get("results") or {}).get("domaintools") or {}
+            owner = (pivot.get("indicator") or "").strip().lower()
             for cert in dt.get("certificates") or []:
                 sha1 = (cert.get("sha1") or "").strip().lower()
                 shared = cert.get("domains_on_cert", 0)
                 if not sha1 or sha1 == "unknown" or sha1 in seen:
                     continue
                 seen.add(sha1)
-                if shared == 1:
+                if owner and owner not in publishable:
+                    excluded.append({
+                        "indicator": sha1,
+                        "reason": (
+                            f"certificate belongs to {owner}, which was not "
+                            "published, so publishing it would identify that "
+                            "host anyway"
+                        ),
+                    })
+                elif shared == 1:
                     included.append({
                         "indicator": sha1,
                         "type": "SSLCertFingerprint",
