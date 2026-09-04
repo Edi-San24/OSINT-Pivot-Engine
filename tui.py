@@ -43,6 +43,15 @@ from core.render import build_metrics_table, format_summary, get_risk_color
 from core.risk import extract_dissent, extract_threat_level, resolve_risk_level
 
 ACCENT = "#17375E"
+
+# Derived from ACCENT rather than picked separately, so the scheme stays one
+# colour. BORDER is the accent lifted until it reads against the background:
+# #17375E on #0b1220 is nearly invisible as a one-cell line, which is why every
+# panel edge used to disappear. GLOW is for focus and the active spinner.
+SURFACE = "#0e1728"
+BORDER = "#2b537f"
+GLOW = "#5b9bd5"
+MUTED = "#7d8ba3"
 HISTORY_PATH = PROJECT_ROOT / ".tui_history.json"
 HISTORY_LIMIT = 10
 
@@ -382,7 +391,6 @@ class MainScreen(Screen):
         with Horizontal(id="body"):
             with Vertical(id="sidebar"):
                 with Vertical(id="input-panel"):
-                    yield Label("[bold]Investigate[/bold]")
                     yield Input(
                         placeholder="IP, domain, hash, group, malware family",
                         id="seed",
@@ -409,19 +417,24 @@ class MainScreen(Screen):
                     yield Button("Run investigation", variant="primary", id="run")
                     yield Static("", id="status")
                 with Vertical(id="history-panel"):
-                    yield Label("[bold]Recent[/bold]")
                     yield ListView(id="history")
             with Vertical(id="results-panel"):
-                yield Label("[bold]Results[/bold]", id="results-title")
                 # auto_scroll off so a fresh result reads from the top rather
-                # than jumping to the end of the summary.
+                # than jumping to the end of the summary. min_width matters:
+                # RichLog defaults to 78 and the panel's inner width here is
+                # about 69, so every summary was rendered nine columns too wide
+                # and silently clipped behind a horizontal scrollbar.
                 yield RichLog(id="results", wrap=True, markup=True,
-                              highlight=False, auto_scroll=False)
+                              highlight=False, auto_scroll=False, min_width=20)
         yield Footer()
 
     def on_mount(self) -> None:
         self.title = "OSINT Pivot Engine"
         self.sub_title = "Autonomous threat intelligence"
+        # Titles ride the panel borders rather than costing a row each.
+        self.query_one("#input-panel").border_title = "Investigate"
+        self.query_one("#history-panel").border_title = "Recent"
+        self.query_one("#results-panel").border_title = "Results"
         self._refresh_history()
         self.query_one("#seed", Input).focus()
         log = self.query_one("#results", RichLog)
@@ -653,66 +666,80 @@ class OsintPivotTUI(App):
     CSS = f"""
     Screen {{ background: #0b1220; }}
 
-    Header {{ background: {ACCENT}; color: white; }}
+    Header {{ background: {ACCENT}; color: white; text-style: bold; }}
     Footer {{ background: {ACCENT}; }}
+    Footer > .footer--key {{ background: {BORDER}; color: white; }}
 
-    #body {{ height: 1fr; }}
+    /* Bottom padding is load-bearing: without it the sidebar runs flush
+       into the footer and the last history row is clipped in half. */
+    #body {{ height: 1fr; padding: 1 1 1 1; }}
 
     /* 44 fits "Deep scan (SpiderFoot)" without truncating. */
     #sidebar {{ width: 44; min-width: 38; }}
 
-    #input-panel {{
-        border: round {ACCENT};
+    /* One panel treatment, three panels. Titles ride the border, which is why
+       the header rows inside each panel could go. */
+    #input-panel, #history-panel, #results-panel {{
+        border: round {BORDER};
+        border-title-color: {GLOW};
+        border-title-style: bold;
+        background: {SURFACE};
         padding: 1 2;
-        height: auto;
     }}
+    #input-panel {{ height: auto; }}
+    #history-panel {{ height: 1fr; min-height: 12; margin-top: 1; }}
+    #results-panel {{ width: 1fr; margin-left: 1; }}
 
-    #history-panel {{
-        border: round {ACCENT};
-        padding: 1 2;
-        height: 1fr;
-        min-height: 14;
-        margin-top: 1;
+    #results {{ height: 1fr; background: {SURFACE}; scrollbar-size-vertical: 1; }}
+    #history {{ background: {SURFACE}; scrollbar-size-vertical: 1; }}
+
+    #seed {{
+        margin-bottom: 1;
+        background: #0b1220;
+        border: tall #0b1220;
     }}
-
-    #results-panel {{
-        border: round {ACCENT};
-        padding: 1 2;
-        width: 1fr;
-        margin-left: 1;
-    }}
-
-    #results {{ height: 1fr; background: #0b1220; }}
-
-    #seed {{ margin-bottom: 1; }}
+    #seed:focus {{ border: tall {GLOW}; }}
     #depth {{ margin-bottom: 1; }}
-    #run {{ width: 100%; margin-top: 1; }}
-    #status {{ height: 1; margin-top: 1; }}
 
-    .toggle-row {{ height: 3; align-vertical: middle; }}
-    .toggle-row Label {{ padding-top: 1; padding-left: 1; }}
+    /* One row per toggle instead of three. Textual's Switch is height 3 by
+       default because of its border, and four of them cost twelve rows of a
+       thirty-five row sidebar, which is what starved the Recent panel down to
+       a single visible entry. */
+    .toggle-row {{ height: 1; margin-bottom: 1; }}
+    .toggle-row Label {{ padding-left: 1; }}
+    Switch {{ height: 1; border: none; background: #0b1220; }}
+    Switch:focus {{ background: {BORDER}; }}
+    Switch.-on > .switch--slider {{ color: {GLOW}; }}
 
-    #history {{ background: #0b1220; }}
-    ListItem {{ height: 1; padding: 0 1; }}
+    #run {{ width: 100%; margin-top: 1; background: {ACCENT}; color: white; }}
+    #run:hover {{ background: {BORDER}; }}
+    #status {{ height: 1; margin-top: 1; color: {MUTED}; }}
+
+    ListItem {{ height: 1; padding: 0 1; background: {SURFACE}; }}
+    ListItem.--highlight {{ background: {ACCENT}; }}
+    ListView:focus > ListItem.--highlight {{ background: {BORDER}; }}
 
     #picker {{
-        border: round {ACCENT};
-        background: #0b1220;
+        border: round {BORDER};
+        border-title-color: {GLOW};
+        background: {SURFACE};
         padding: 1 2;
         margin: 4 12;
         height: auto;
         max-height: 80%;
     }}
-    #picker-list {{ height: auto; max-height: 20; background: #0b1220; }}
+    #picker-list {{ height: auto; max-height: 20; background: {SURFACE}; }}
 
     #wizard {{
-        border: round {ACCENT};
+        border: round {BORDER};
+        border-title-color: {GLOW};
+        background: {SURFACE};
         padding: 2 4;
         margin: 2 8;
         height: auto;
     }}
-    #wizard-title {{ margin-top: 1; }}
-    #wizard-detail {{ margin-bottom: 1; }}
+    #wizard-title {{ margin-top: 1; text-style: bold; }}
+    #wizard-detail {{ margin-bottom: 1; color: {MUTED}; }}
     #wizard-warning {{ height: auto; }}
     #wizard-buttons {{ height: 3; margin-top: 1; }}
     #wizard-buttons Button {{ margin-right: 2; }}
