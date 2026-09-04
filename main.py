@@ -60,7 +60,53 @@ Examples:
 \b
   Follow the chain further than the default three pivots
     main.py -s suspicious-domain.com --depth 5
+
+\b
+  Decide which candidates are worth a pivot, spending no VirusTotal quota
+    main.py --screen -s candidates.txt
+    main.py --screen -s 1.2.3.4,evil.example
 """
+
+VERDICT_COLOURS = {"GO": "bold green", "WEAK": "bold yellow", "SKIP": "dim"}
+
+
+def _screen_seeds(seed: str) -> None:
+    """
+    Screens candidates and prints the verdict with the reasoning behind it.
+
+    The reasons matter more than the verdict. A SKIP an analyst disagrees with
+    is one they can overrule, and the point is to show what the screen saw
+    rather than to gate anything.
+    """
+    from pathlib import Path
+    from core.executor import PivotExecutor
+
+    path = Path(seed)
+    if path.is_file():
+        candidates = [ln.strip() for ln in path.read_text().splitlines()
+                      if ln.strip() and not ln.startswith("#")]
+    else:
+        candidates = [s.strip() for s in seed.split(",") if s.strip()]
+
+    console.print(
+        f"[cyan]Screening {len(candidates)} candidate(s). "
+        f"No VirusTotal quota is spent.[/cyan]\n"
+    )
+    executor = PivotExecutor()
+    tally = {}
+    for candidate in candidates:
+        verdict = executor.screen(candidate)
+        mark = verdict["verdict"]
+        tally[mark] = tally.get(mark, 0) + 1
+        colour = VERDICT_COLOURS.get(mark, "white")
+        console.print(
+            f"[{colour}]{mark:<5}[/{colour}] {verdict['indicator'][:44]}"
+        )
+        for reason in verdict.get("reasons", []):
+            console.print(f"      [dim]{reason}[/dim]")
+    console.print(
+        "\n  " + "  ".join(f"{k} {v}" for k, v in sorted(tally.items()))
+    )
 
 
 @click.command(
@@ -80,10 +126,14 @@ Examples:
               help="Write the full result, including raw connector output, to JSON.")
 @click.option("--export-stix", default=None, metavar="PATH",
               help="Write a STIX 2.1 bundle for MISP, OpenCTI, or any TAXII platform.")
+@click.option("--screen", is_flag=True, default=False,
+              help="Judge whether seeds are worth a pivot, without spending one. "
+                   "--seed takes a comma-separated list or a path to a file of "
+                   "one indicator per line. Costs no VirusTotal quota.")
 # Display
 @click.option("--verbose", "-v", is_flag=True, default=False,
               help="Show how the score and risk level were derived.")
-def run(seed, depth, deep, output, export_stix, verbose):
+def run(seed, depth, deep, output, export_stix, screen, verbose):
     """
     Autonomous threat intelligence enrichment.
 
@@ -102,10 +152,14 @@ def run(seed, depth, deep, output, export_stix, verbose):
       Username          threat_actor_handle
     """
 
+    if screen:
+        _screen_seeds(seed)
+        return
+
     if depth:
         import config
         config.MAX_PIVOT_DEPTH = depth
- 
+
     banner = (
         "[cyan]══════════════════════════════════════[/cyan]\n"
         "[bold white]OSINT PIVOT ENGINE[/bold white]\n"

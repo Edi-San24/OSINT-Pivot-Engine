@@ -8,7 +8,7 @@ import re
 import time
 from datetime import datetime, timezone
 
-from core.risk import is_routable_ip
+from core.risk import TENANCY_WINDOW_DAYS, is_routable_ip, last_seen_within
 
 logger = logging.getLogger(__name__)
 
@@ -222,32 +222,6 @@ def _is_under(name: str, parents: set[str]) -> bool:
     return any(name == p or name.endswith("." + p) for p in parents)
 
 
-# How recently a name must have resolved to an address to count as a current
-# tenant of it. Passive DNS keeps names for years, so without a window the
-# tenancy check answers "who was ever here" rather than "who is here now".
-TENANCY_WINDOW_DAYS = 45
-
-
-def _last_seen_within(record: dict, days: int) -> bool:
-    """
-    Whether a passive DNS record was observed inside the window.
-
-    Sources disagree on units — DNSDB reports epoch seconds, mnemonic reports
-    milliseconds — so anything implausibly large is rescaled. A record carrying
-    no timestamp counts as current, since absence of a date is not evidence the
-    neighbour has gone.
-    """
-    raw = record.get("last_seen") or record.get("time_last")
-    if not raw:
-        return True
-    try:
-        stamp = float(raw)
-    except (TypeError, ValueError):
-        return True
-    if stamp > 1e11:          # milliseconds
-        stamp /= 1000.0
-    return (time.time() - stamp) <= days * 86400
-
 
 
 # Cache so one export does not re-query the same neighbour repeatedly.
@@ -343,7 +317,7 @@ def _co_hosted_tenants(pivot: dict, investigated_domains: set[str]) -> list[str]
         # an address whose only live co-tenant was one other domain — DomainTools
         # said 3 domains on it while this returned 10, nine of them last seen
         # between 2019 and 2025.
-        if _last_seen_within(record, TENANCY_WINDOW_DAYS):
+        if last_seen_within(record, TENANCY_WINDOW_DAYS):
             tenants.append(value)
 
     # Neighbours the feeds already flag are not bystanders, so they do not earn

@@ -3,6 +3,7 @@
 # a normalized result across all sources. 
 
 
+import ipaddress
 import time
 import logging
 from urllib.parse import urlparse
@@ -12,6 +13,7 @@ from concurrent.futures import TimeoutError as FuturesTimeout
 import config
 from core import hacktivist
 from core.detector import detect_type
+from core.risk import is_routable_ip, last_seen_within
 from connectors.virustotal import VirusTotalConnector
 from connectors.shodan import ShodanConnector
 from connectors.censys import CensysConnector
@@ -63,6 +65,36 @@ CHAINABLE_TOOLS = {
 
 # Caps the MalwareBazaar lookups fired per threat group pivot.
 MAX_TOOLING_LOOKUPS = 5
+
+# CDN edge ranges. A seed resolving into one of these exposes no origin, so
+# passive DNS, Shodan and the co-tenant chain have nothing to work with and a
+# pivot spends its budget for nothing. Knight Office put 25 of 26 lure domains
+# behind Cloudflare and the whole investigation reached one real host.
+#
+# Blocking or publishing an address in these ranges would also hit every other
+# site behind the same edge, which is most of the web.
+CDN_RANGES = tuple(ipaddress.ip_network(n) for n in (
+    # Cloudflare
+    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+    "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+    "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+    "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+    # Fastly
+    "151.101.0.0/16", "199.232.0.0/16",
+    # Akamai
+    "23.32.0.0/11", "23.192.0.0/11", "104.64.0.0/10", "184.24.0.0/13",
+))
+
+# Co-tenant counts that decide whether an address is worth a pivot. Zero current
+# neighbours is a dead end, a handful means the address is close to dedicated
+# and its neighbours are leads, and a crowd means shared hosting where every
+# neighbour is a bystander rather than a lead.
+SCREEN_TENANT_CEILING = 8
+
+# Independent OTX authors above which the enumeration work is already done
+# elsewhere. Authors rather than pulses: a bulk feed publishes daily and would
+# otherwise read as saturation coverage of something nobody has examined.
+SCREEN_PULSE_CEILING = 3
 
 # Threat group discovery gets a longer ceiling than the default fan-out.
 # OTX pulse search measures 28-58s, which is slow but is the only source that
@@ -538,6 +570,130 @@ class PivotExecutor:
         results = _run_parallel(tasks)
         return {"indicator": filename, "type": "filename", "results": results}
  
+    def screen(self, seed: str) -> dict:
+        """
+        Whether a candidate seed is worth a full pivot, without spending one.
+
+        Deliberately cheap: DNS, passive DNS, OTX and the two abuse.ch feeds,
+        and no VirusTotal at all, so a list of fifty candidates costs no daily
+        quota. Answers the three questions that decided every wasted
+        investigation so far — is there an origin to pivot to, are the
+        neighbours leads or bystanders, and has somebody already mapped this.
+        """
+        validation = self.validate(seed)
+        if not validation["valid"]:
+            return {"indicator": seed, "verdict": "SKIP",
+                    "reasons": [validation["reason"]]}
+
+        indicator = validation["indicator"]
+        itype = validation["type"]
+        if itype not in ("ipv4", "domain"):
+            return {"indicator": indicator, "type": itype, "verdict": "GO",
+                    "reasons": [f"{itype} seeds are not screened on hosting"]}
+
+        tasks = {
+            "threatfox": lambda: self.threatfox.query_indicator(indicator, itype),
+            "urlhaus": lambda: self.urlhaus.query_host(indicator),
+            "otx": lambda: self.otx.query_indicator(
+                indicator, "IPv4" if itype == "ipv4" else "domain"),
+        }
+        if itype == "domain":
+            tasks["dns"] = lambda: self.dns.query_domain(indicator)
+            tasks["passivedns"] = lambda: self.passivedns.query_domain(indicator)
+        else:
+            tasks["passivedns"] = lambda: self.passivedns.query_ip(indicator)
+        if self.dnsdb:
+            tasks["dnsdb"] = (lambda: self.dnsdb.query_domain(indicator)) \
+                if itype == "domain" else (lambda: self.dnsdb.query_ip(indicator))
+
+        results = _run_parallel(tasks)
+        reasons, blocking = [], False
+
+        addresses = [a for a in ((results.get("dns") or {}).get("a") or [])
+                     if is_routable_ip(a)]
+        if itype == "ipv4":
+            addresses = [indicator]
+        behind_cdn = [a for a in addresses
+                      if any(ipaddress.ip_address(a) in n for n in CDN_RANGES)]
+        if addresses and len(behind_cdn) == len(addresses):
+            reasons.append(
+                f"resolves only to CDN edge ({', '.join(behind_cdn[:2])}), "
+                "so no origin is reachable"
+            )
+            blocking = True
+
+        # Current neighbours only. Passive DNS keeps names for years, and the
+        # question is who is here now, not who ever was.
+        records = list((results.get("passivedns") or {}).get("records") or [])
+        records.extend((results.get("dnsdb") or {}).get("records") or [])
+        neighbours = {
+            (r.get("domain") or r.get("ip") or "").strip().lower()
+            for r in records if last_seen_within(r)
+        } - {"", indicator.lower()}
+        if itype == "ipv4":
+            if not neighbours:
+                reasons.append("no current names on this address, nothing to chain")
+                blocking = True
+            elif len(neighbours) > SCREEN_TENANT_CEILING:
+                reasons.append(
+                    f"{len(neighbours)} current co-tenants, shared hosting: "
+                    "neighbours are bystanders rather than leads"
+                )
+                blocking = True
+            else:
+                reasons.append(f"{len(neighbours)} current co-tenant(s), chainable")
+
+        # Distinct authors, not pulse count. A bulk feed publishes one pulse per
+        # day naming thousands of addresses, and counting those as coverage
+        # skipped 178.62.3.223 on "50 OTX pulses, already mapped" when all 50
+        # were one honeypot feed and nobody had looked at it at all.
+        otx = results.get("otx") or {}
+        pulses = otx.get("pulse_count")
+        authors = {
+            (p.get("author") or p.get("author_name") or "").strip()
+            for p in (otx.get("pulses") or [])
+        } - {""}
+        independent = len(authors) if authors else pulses
+        if isinstance(independent, int):
+            spread = (f"{pulses} OTX pulse(s) from {len(authors)} author(s)"
+                      if authors else f"{pulses} OTX pulse(s)")
+            if independent >= SCREEN_PULSE_CEILING:
+                reasons.append(f"{spread}, already mapped elsewhere")
+                blocking = True
+            else:
+                reasons.append(f"{spread}, enumeration still open")
+
+        threatfox = results.get("threatfox") or {}
+        urlhaus = results.get("urlhaus") or {}
+        listed = ""
+        if threatfox.get("found"):
+            listed = f"ThreatFox confidence {threatfox.get('max_confidence')}"
+        elif urlhaus.get("found"):
+            listed = "URLhaus"
+        if listed:
+            reasons.append(f"listed by {listed}, so a score will mean something")
+        else:
+            # Not blocking on its own. No listing cannot distinguish undiscovered
+            # from unremarkable, which is a weak seed rather than a bad one.
+            reasons.append("no feed listing, so a quiet result will be unreadable")
+
+        failed = sorted(n for n, p in results.items()
+                        if isinstance(p, dict) and "error" in p)
+        if failed:
+            reasons.append(f"no data from {', '.join(failed)}")
+
+        return {
+            "indicator": indicator,
+            "type": itype,
+            "verdict": "SKIP" if blocking else ("GO" if listed else "WEAK"),
+            "reasons": reasons,
+            "current_neighbours": sorted(neighbours)[:10],
+            "otx_pulses": pulses,
+            "otx_authors": len(authors),
+            "feed_listing": listed,
+            "behind_cdn": bool(behind_cdn),
+        }
+
     def run(self, seed: str, deep: bool = False) -> dict:
         """
         Validates the seed indicator and routes to the correct pivot method.

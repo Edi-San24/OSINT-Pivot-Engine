@@ -4,6 +4,7 @@
 # two front ends can never disagree about the same indicator.
 
 import ipaddress
+import time
 
 
 # Types the graph and temporal layers do not apply to, so core.agent blends them
@@ -62,6 +63,38 @@ DOMAIN_BAND_PRECISION = {"HIGH": 0.89, "MEDIUM": 0.43, "LOW": 0.20}
 # had learned to tell a mature multi-service host from a minimal one.
 
 BASE_RATES = {"domain": 0.504}
+
+
+# How recently a name must have resolved to an address to count as a current
+# tenant of it. Passive DNS keeps names for years, so without a window the
+# tenancy check answers "who was ever here" rather than "who is here now".
+#
+# Lives here rather than in stix_exporter, where it started, because both the
+# publisher and PivotExecutor.screen ask the same question and the exporter
+# consumes what the executor produces, so importing upward would invert the
+# layering.
+TENANCY_WINDOW_DAYS = 45
+
+
+def last_seen_within(record: dict, days: int = TENANCY_WINDOW_DAYS) -> bool:
+    """
+    Whether a passive DNS record was observed inside the window.
+
+    Sources disagree on units — DNSDB reports epoch seconds, mnemonic reports
+    milliseconds — so anything implausibly large is rescaled. A record carrying
+    no timestamp counts as current, since absence of a date is not evidence the
+    neighbour has gone.
+    """
+    raw = record.get("last_seen") or record.get("time_last")
+    if not raw:
+        return True
+    try:
+        stamp = float(raw)
+    except (TypeError, ValueError):
+        return True
+    if stamp > 1e11:          # milliseconds
+        stamp /= 1000.0
+    return (time.time() - stamp) <= days * 86400
 
 
 def is_routable_ip(value: str) -> bool:
