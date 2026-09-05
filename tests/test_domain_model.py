@@ -90,6 +90,63 @@ def check(condition: bool, description: str) -> None:
         failures.append(description)
 
 
+def check_actor_designators() -> None:
+    """
+    An actor name a vendor actually publishes has to resolve to threat_group.
+
+    Checked against every group name and alias in the shipped ATT&CK bundle
+    rather than against a handful of examples, because the failures were whole
+    naming schemes rather than one-offs: 33 designators resolved to "username"
+    so the executor refused the seed, and Mandiant's TEMP.<Word> parsed as
+    label.tld so eight actors were routed to the domain pivot and asked of DNS.
+    APT-C-36 is Blind Eagle and APT-C-43 is Machete's own alias.
+
+    The other half is the guard. Digit counts stay per-scheme so a handle
+    ending in digits is not swept up, which is what keeps 154 single-word
+    aliases correctly reading as usernames rather than being forced.
+    """
+    print("\n-- published actor designators resolve to threat_group --")
+
+    for name in ("APT-C-36", "APT-C-43", "APT-Q-98", "T-APT-04", "TAG-144",
+                 "TG-3390", "UAC-0056", "ITG07", "HIVE0154", "Group123",
+                 "APT28", "FIN7", "TA505", "UNC2452", "G0016"):
+        got = (detect_type(name) or {}).get("type")
+        check(got == "threat_group", f"{name:12} -> {got}")
+
+    # Roster cases: shaped like a handle, a domain, or nothing at all, so no
+    # pattern can reach them safely.
+    for name in ("Lorec53", "IRN2", "TEMP.Veles", "TEMP.Hex", "LAPSUS$",
+                 "admin@338"):
+        got = (detect_type(name) or {}).get("type")
+        check(got == "threat_group", f"{name:12} -> {got}  (roster, not pattern)")
+
+    print("\n-- and a handle ending in digits is still a username --")
+    for handle in ("ta5", "gamer53", "user123", "bob2024", "tg1", "tag5",
+                   "itg1", "hive1", "x99"):
+        got = (detect_type(handle) or {}).get("type")
+        check(got != "threat_group", f"{handle:10} -> {got}")
+
+    # The whole bundle, so a future pattern change cannot quietly misroute an
+    # actor into an infrastructure pivot.
+    fixture = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "data", "enterprise-attack.json")
+    if not os.path.exists(fixture):
+        return
+    names = set()
+    for obj in json.load(open(fixture, encoding="utf-8"))["objects"]:
+        if obj.get("type") != "intrusion-set" or obj.get("revoked"):
+            continue
+        names.add(obj.get("name", ""))
+        names.update(obj.get("aliases") or [])
+    misrouted = sorted(
+        n.strip() for n in names if n.strip()
+        and (detect_type(n.strip()) or {}).get("type")
+        in ("domain", "ipv4", "url", "email", None)
+    )
+    check(not misrouted,
+          f"no ATT&CK actor routes to an infrastructure pivot -> {misrouted[:4] or 'none'}")
+
+
 def check_publication_gate(entries: dict) -> None:
     """
     A domain the chain discovered needs a source other than our own model
@@ -320,6 +377,7 @@ def main() -> int:
     # verdict has to be reproducible on a fresh clone too.
     check_verdict_is_deterministic(scorer)
     check_seed_formats()
+    check_actor_designators()
     check_publication_gate(entries)
 
     if scorer.domain_gb is None:

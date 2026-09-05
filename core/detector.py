@@ -104,15 +104,43 @@ KNOWN_THREAT_GROUPS = {
     "trigona", "vanhelsing", "embargo", "fog", "helldown", "braincipher",
     "nitrogen", "rhysida", "funksec", "safepay",
 
+    # Aliases shaped like a handle rather than a designator, so no pattern can
+    # reach them without also claiming every username ending in digits.
+    # OilRig, VOID MANTICORE and Saint Bear respectively.
+    "irn2", "karmabelow80", "lorec53",
+
+    # Mandiant's TEMP.<Word> scheme parses as label.tld, so these eight were
+    # detected as domains and routed to the domain pivot, which then asked DNS
+    # and WHOIS about "temp.hex". Listed rather than patterned: `temp\.[a-z]+`
+    # would claim temp.com and temp.io along with them, and detection is
+    # case-insensitive so the capital cannot be the discriminator.
+    "temp.hex", "temp.isotope", "temp.jumper", "temp.mixmaster",
+    "temp.periscope", "temp.reaper", "temp.veles", "temp.zagros",
+
+    # Punctuation no pattern should chase. Real ATT&CK actors that resolved to
+    # no type at all, so the executor refused the seed outright.
+    "lapsus$", "dev#popper", "admin@338",
+
 } | HACKTIVIST_GROUPS
 
 # Naming conventions rather than names, so a pattern covers actors no list keeps
 # up with. Digit counts are per-scheme so short handles are not swept up: APT1
 # and FIN7 are real, "ta5" and "g1" are likelier to be usernames.
+# Each alternative is one vendor's scheme, with that scheme's own digit count.
+# Checked against every group name and alias in the ATT&CK bundle: 33 real
+# designators were resolving to "username", so the executor refused them and the
+# pivot never ran. APT-C-36 is Blind Eagle and APT-C-43 is Machete's own alias,
+# so the whole Qihoo family was unreachable.
 ACTOR_DESIGNATOR = re.compile(
     r"^(?:"
     r"(?:apt|fin)[\s\-._]?\d{1,3}"                     # APT1, APT28, FIN7
+    r"|apt[\s\-._]?[a-z][\s\-._]?\d{1,3}"              # APT-C-36, APT-Q-98
+    r"|t[\s\-._]?apt[\s\-._]?\d{1,3}"                  # T-APT-04, T-APT-17
     r"|(?:ta|unc|temp|storm|dev|utg)[\s\-._]?\d{3,5}"  # TA505, UNC2452, Storm-0558
+    r"|tag[\s\-._]?\d{2,4}"                            # TAG-22, TAG-144
+    r"|(?:tg|uac|hive)[\s\-._]?\d{4}"                  # TG-3390, UAC-0056, HIVE0154
+    r"|itg[\s\-._]?\d{2,3}"                            # ITG07, ITG18
+    r"|group[\s\-._]?\d{1,3}"                          # Group5, Group123
     r"|g\d{4}"                                         # ATT&CK group IDs, G0016
     r")[a-z]?$",
     re.IGNORECASE,

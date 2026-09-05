@@ -8,6 +8,7 @@ import re
 import time
 from datetime import datetime, timezone
 
+from core.detector import detect_type
 from core.risk import TENANCY_WINDOW_DAYS, is_routable_ip, last_seen_within
 
 logger = logging.getLogger(__name__)
@@ -209,11 +210,40 @@ OTX_TYPES = {
     "ipv4": "IPv4",
     "domain": "domain",
     "hostname": "hostname",
+    "url": "URL",
     "md5": "FileHash-MD5",
     "sha1": "FileHash-SHA1",
     "sha256": "FileHash-SHA256",
     "email": "email",
 }
+
+# Engine types that are not OTX indicators at all. A threat group is a pulse's
+# adversary field and a malware family is its malware_families field, so both
+# were being published as indicators of a type OTX does not accept.
+NOT_OTX_INDICATORS = {"threat_group", "software", "filename", "username"}
+
+# Digest length to OTX name, for pivots typed only as the generic "hash".
+_HASH_BY_LENGTH = {32: "FileHash-MD5", 40: "FileHash-SHA1", 64: "FileHash-SHA256"}
+
+
+def otx_type(name: str, itype: str) -> str:
+    """
+    The OTX type name for an indicator, or "" when OTX has no type for it.
+
+    Unmapped types used to fall through as the engine's own name, so a pulse
+    shipped indicators typed `hash` and `threat_group`. OTX accepts neither and
+    drops them on upload, which is the silent-loss failure `_otx_rejection`
+    exists to prevent: the analyst believes they published something they did
+    not. `executor.pivot_hash` types every digest as `hash` regardless of
+    algorithm, so the length resolves it.
+    """
+    if itype in NOT_OTX_INDICATORS:
+        return ""
+    if itype in OTX_TYPES:
+        return OTX_TYPES[itype]
+    if itype == "hash" or re.fullmatch(r"[a-fA-F0-9]{32,64}", name or ""):
+        return _HASH_BY_LENGTH.get(len(name or ""), "")
+    return ""
 
 
 def _is_under(name: str, parents: set[str]) -> bool:
@@ -348,6 +378,34 @@ def _feed_listed(pivot: dict) -> str:
         return "URLhaus"
 
     return ""
+
+
+def _adversary(investigations: list[dict]) -> str:
+    """
+    The actor name for the pulse's adversary field, from ATT&CK rather than the
+    seed string, so an alias resolves to the name MITRE uses.
+    """
+    for investigation in investigations:
+        for pivot in investigation.get("full_results", []):
+            mitre = (pivot.get("results") or {}).get("mitre") or {}
+            if mitre.get("group_name"):
+                return mitre["group_name"]
+    return ""
+
+
+def _families(investigations: list[dict]) -> list[str]:
+    """Malware family names seen across the chain, for malware_families."""
+    names = set()
+    for investigation in investigations:
+        for pivot in investigation.get("full_results", []):
+            results = pivot.get("results") or {}
+            for software in (results.get("mitre") or {}).get("software") or []:
+                if software.get("name"):
+                    names.add(software["name"])
+            family = (results.get("malwarebazaar") or {}).get("malware_family")
+            if family and family != "unknown":
+                names.add(family)
+    return sorted(names)
 
 
 def _corroboration(pivot: dict) -> str:
@@ -535,9 +593,20 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
                 })
                 continue
 
+        kind = otx_type(name, resolved)
+        if not kind:
+            excluded.append({
+                "indicator": name,
+                "reason": (
+                    f"OTX has no indicator type for {resolved!r}; a threat group "
+                    "belongs in the pulse's adversary field and a malware family "
+                    "in malware_families, not in the indicator list"
+                ),
+            })
+            continue
         included.append({
             "indicator": original,
-            "type": OTX_TYPES.get(resolved, resolved),
+            "type": kind,
             "engine_risk_level": investigation.get("risk_level", "unknown"),
         })
 
@@ -672,22 +741,43 @@ def build_pulse(investigations: list[dict], title: str, description: str,
     forced = {i.strip().lower() for i in (include or []) if i.strip()}
     if forced:
         published = {e["indicator"].lower() for e in included}
-        remaining = []
+        remaining, reinstated = [], set()
         for entry in excluded:
             name = entry["indicator"].lower()
             if name in forced and name not in published:
+                reinstated.add(name)
                 included.append({
                     "indicator": entry["indicator"],
-                    "type": OTX_TYPES.get(
-                        "ipv4" if name.replace(".", "").isdigit() else "domain",
-                        "domain",
-                    ),
+                    "type": otx_type(
+                        name, "ipv4" if name.replace(".", "").isdigit() else "domain"
+                    ) or "domain",
                     "engine_risk_level": "analyst-included",
                     "caveat": entry.get("reason", ""),
                 })
             else:
                 remaining.append(entry)
         excluded = remaining
+
+        # A name the selector never saw at all, rather than one it dropped.
+        # Only investigated indicators are eligible for selection, so a passive
+        # DNS neighbour the chain never pivoted was not merely excluded, it was
+        # never a candidate, and --include used to do nothing for it without
+        # saying so. project0.cc and bribanking.com were both this case: the
+        # apex of a campaign's own zone, sitting on the flagged host, that the
+        # chain reached only as a neighbour. Carries a caveat because the engine
+        # genuinely has no assessment of it, so the claim is the analyst's.
+        for name in sorted(forced - published - reinstated):
+            detected = detect_type(name) or {}
+            kind = detected.get("type", "domain")
+            included.append({
+                "indicator": detected.get("indicator", name),
+                "type": otx_type(detected.get("indicator", name), kind) or "domain",
+                "engine_risk_level": "analyst-included",
+                "caveat": (
+                    "never assessed by the engine — not investigated, so this "
+                    "rests on analyst judgement rather than any score"
+                ),
+            })
 
     leaked = leaked_indicators(description, included)
     if leaked:
@@ -706,8 +796,11 @@ def build_pulse(investigations: list[dict], title: str, description: str,
         "indicators": [
             {"indicator": i["indicator"], "type": i["type"]} for i in included
         ],
-        "malware_families": [],
-        "adversary": "",
+        # Where a threat group and a malware family actually belong. They were
+        # being emitted as indicators of a type OTX does not accept, so the
+        # actor name was both invalid and absent from the field meant for it.
+        "malware_families": _families(investigations),
+        "adversary": _adversary(investigations),
         "targeted_countries": [],
         # Not part of the OTX payload. Kept so every dropped indicator has a
         # stated reason rather than vanishing silently.
