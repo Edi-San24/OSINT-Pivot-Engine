@@ -264,7 +264,8 @@ class OTXConnector:
 
     def publish_pulse(self, title: str, description: str, indicators: list,
                       tags: list, malware_families: list, adversary: str = "",
-                      targeted_countries: list = None) -> dict:
+                      targeted_countries: list = None,
+                      attack_ids: list = None) -> dict:
         """
         Publishes a new OTX pulse from investigation findings.
         Called after an investigation completes when --publish-otx flag is set.
@@ -273,17 +274,23 @@ class OTXConnector:
         """
         if targeted_countries is None:
             targeted_countries = []
- 
+
         payload = {
             "name": title,
             "description": description,
-            "public": 1,
+            # A boolean. OTX 400s on the int with "Must be of type boolean".
+            "public": True,
             "TLP": "white",
             "tags": tags,
             "indicators": indicators,
             "malware_families": malware_families,
             "adversary": adversary,
             "targeted_countries": targeted_countries,
+            # Plain strings. OTX rejects a list of dicts with "Must be a list
+            # of strings ({'id': 'T1566.001'} is <class 'dict'>)". The field was
+            # absent entirely before, so a pulse built with an ATT&CK mapping
+            # published without one and nothing said so.
+            "attack_ids": [str(a) for a in (attack_ids or [])],
         }
  
         try:

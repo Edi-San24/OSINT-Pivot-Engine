@@ -222,6 +222,10 @@ OTX_TYPES = {
 # were being published as indicators of a type OTX does not accept.
 NOT_OTX_INDICATORS = {"threat_group", "software", "filename", "username"}
 
+# OTX's own ceiling on the description field. It 400s the whole submission
+# above this, naming the actual length in the error.
+OTX_DESCRIPTION_LIMIT = 1024
+
 # Digest length to OTX name, for pivots typed only as the generic "hash".
 _HASH_BY_LENGTH = {32: "FileHash-MD5", 40: "FileHash-SHA1", 64: "FileHash-SHA256"}
 
@@ -786,10 +790,22 @@ def build_pulse(investigations: list[dict], title: str, description: str,
             f"not published IOCs; OTX will extract them: {leaked[:6]}"
         )
 
+    # OTX rejects the whole submission with a 400 when the description runs
+    # long, and the pulse is written before anyone finds out. Checked here so
+    # the failure arrives at build time with the overshoot named.
+    if len(description) > OTX_DESCRIPTION_LIMIT:
+        logger.warning(
+            f"Description is {len(description)} chars and OTX accepts "
+            f"{OTX_DESCRIPTION_LIMIT}; trim {len(description) - OTX_DESCRIPTION_LIMIT} "
+            "before uploading."
+        )
+
     return {
         "name": title,
         "description": description,
-        "public": 1,
+        # A boolean, not 1. OTX 400s on the int, so every pulse this exporter
+        # has produced would have been rejected on that field alone.
+        "public": True,
         "TLP": "white",
         "tags": tags or [],
         "attack_ids": attack_ids or [],
