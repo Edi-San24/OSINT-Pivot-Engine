@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +41,7 @@ from textual.widgets import (
 
 from config import ENV_PATH, PROJECT_ROOT
 from core.render import build_metrics_table, format_summary, get_risk_color
+from core.stix_exporter import build_pulse, select_indicators
 from core.risk import extract_dissent, extract_threat_level, resolve_risk_level
 
 ACCENT = "#17375E"
@@ -266,6 +268,148 @@ class IndicatorPicker(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class ExportScreen(ModalScreen[str | None]):
+    """
+    Writes the current investigation to an indicator bundle on disk.
+
+    Selection, bystander protection and the leak check all come from
+    core.stix_exporter, so the file is identical to the one the CLI builds.
+    Nothing is uploaded and no destination is contacted: the screen produces a
+    JSON file, and where it goes afterwards is the analyst's decision.
+    """
+
+    BINDINGS = [
+        Binding("escape", "dismiss_none", "Cancel"),
+        Binding("ctrl+s", "save", "Save"),
+    ]
+
+    def __init__(self, result: dict) -> None:
+        super().__init__()
+        self.result = result
+        self.included: list[dict] = []
+        self.excluded: list[dict] = []
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="export"):
+            yield Label("[bold]Export indicator bundle[/bold]")
+            yield Input(placeholder="Title", id="export-title")
+            yield Input(placeholder="Description", id="export-desc")
+            yield Input(placeholder="Tags, comma separated (optional)",
+                        id="export-tags")
+            yield Input(placeholder="ATT&CK IDs, comma separated (optional)",
+                        id="export-attack")
+            yield Static("", id="export-preview")
+            yield Input(placeholder="Filename", id="export-path")
+            yield Static("", id="export-status")
+            with Horizontal(id="export-buttons"):
+                yield Button("Save JSON", variant="primary", id="export-save")
+                yield Button("Cancel", id="export-cancel")
+
+    def on_mount(self) -> None:
+        seed = (self.result.get("indicator") or "indicator").strip()
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", seed)[:40].strip("_") or "bundle"
+        self.query_one("#export-path", Input).value = f"{safe}_bundle.json"
+        self.query_one("#export-title", Input).value = f"{seed}: pivot findings"
+
+        # Selection runs once on open so the count and the exclusions are
+        # visible before anything is typed.
+        try:
+            self.included, self.excluded = select_indicators([self.result])
+        except Exception as exc:
+            self.query_one("#export-status", Static).update(
+                f"[red]Could not select indicators: {type(exc).__name__}[/red]"
+            )
+        self._render_preview()
+        self.query_one("#export-title", Input).focus()
+
+    def _render_preview(self) -> None:
+        kinds: dict[str, int] = {}
+        for entry in self.included:
+            kinds[entry["type"]] = kinds.get(entry["type"], 0) + 1
+        summary = ", ".join(f"{n} {k}" for k, n in sorted(kinds.items())) or "none"
+        lines = [f"[bold]{len(self.included)} indicator(s)[/bold]  [dim]{summary}[/dim]"]
+        if self.excluded:
+            lines.append(
+                f"[dim]{len(self.excluded)} held back, with reasons, in the "
+                f"companion audit file[/dim]"
+            )
+        self.query_one("#export-preview", Static).update("\n".join(lines))
+
+    @staticmethod
+    def _split(raw: str) -> list[str]:
+        return [part.strip() for part in (raw or "").split(",") if part.strip()]
+
+    def action_save(self) -> None:
+        self._save()
+
+    @on(Button.Pressed, "#export-save")
+    def _save_pressed(self, event: Button.Pressed) -> None:
+        self._save()
+
+    @on(Button.Pressed, "#export-cancel")
+    def _cancel(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+    def _save(self) -> None:
+        status = self.query_one("#export-status", Static)
+        title = self.query_one("#export-title", Input).value.strip()
+        description = self.query_one("#export-desc", Input).value.strip()
+        path = self.query_one("#export-path", Input).value.strip()
+
+        # Both are required: an untitled bundle with no description is not
+        # something a reader can act on later.
+        if not title:
+            status.update("[red]Enter a title first[/red]")
+            self.query_one("#export-title", Input).focus()
+            return
+        if not description:
+            status.update("[red]Enter a description first[/red]")
+            self.query_one("#export-desc", Input).focus()
+            return
+        if not path:
+            status.update("[red]Enter a filename first[/red]")
+            self.query_one("#export-path", Input).focus()
+            return
+        if not self.included:
+            status.update("[red]No publishable indicators in this result[/red]")
+            return
+
+        try:
+            bundle = build_pulse(
+                [self.result],
+                title=title,
+                description=description,
+                tags=self._split(self.query_one("#export-tags", Input).value),
+                attack_ids=self._split(self.query_one("#export-attack", Input).value),
+            )
+        except Exception as exc:
+            status.update(f"[red]Build failed: {type(exc).__name__}: {exc}[/red]")
+            return
+
+        target = Path(path)
+        if target.suffix != ".json":
+            target = target.with_suffix(".json")
+        audit = target.with_suffix(".audit.json")
+
+        try:
+            # The audit copy keeps the underscore-prefixed keys, which name
+            # every held-back indicator and the reason. The bundle itself does
+            # not, so the two files are never interchangeable.
+            target.write_text(json.dumps(
+                {k: v for k, v in bundle.items() if not k.startswith("_")},
+                indent=2, default=str,
+            ))
+            audit.write_text(json.dumps(bundle, indent=2, default=str))
+        except OSError as exc:
+            status.update(f"[red]Could not write: {exc}[/red]")
+            return
+
+        self.dismiss(str(target))
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
 class SetupScreen(Screen):
     """
     First-run wizard. Walks the credential list one at a time rather than
@@ -371,6 +515,7 @@ class MainScreen(Screen):
         Binding("ctrl+a", "select_all_results", "Select all"),
         Binding("ctrl+p", "pick_indicator", "Pivot from result"),
         Binding("ctrl+l", "clear_results", "Clear"),
+        Binding("ctrl+e", "export_bundle", "Export JSON"),
     ]
 
     def __init__(self) -> None:
@@ -621,6 +766,18 @@ class MainScreen(Screen):
 
     # ------------------------------------------------------------------ actions
 
+    def action_export_bundle(self) -> None:
+        """Opens the export screen for the result currently on display."""
+        if self.current_result is None:
+            self.notify("Run an investigation first.", severity="warning")
+            return
+
+        def _written(path: str | None) -> None:
+            if path:
+                self.notify(f"Wrote {path} and its audit copy.")
+
+        self.app.push_screen(ExportScreen(self.current_result), _written)
+
     def action_select_all_results(self) -> None:
         self.query_one("#results", RichLog).text_select_all()
 
@@ -726,6 +883,20 @@ class OsintPivotTUI(App):
         max-height: 80%;
     }}
     #picker-list {{ height: auto; max-height: 20; background: {SURFACE}; }}
+
+    #export {{
+        border: round {BORDER};
+        border-title-color: {GLOW};
+        background: {SURFACE};
+        padding: 1 2;
+        margin: 2 8;
+        height: auto;
+    }}
+    #export Input {{ margin-bottom: 1; }}
+    #export-preview {{ height: auto; margin-bottom: 1; }}
+    #export-status {{ height: auto; }}
+    #export-buttons {{ height: 3; margin-top: 1; }}
+    #export-buttons Button {{ margin-right: 2; }}
 
     #wizard {{
         border: round {BORDER};
