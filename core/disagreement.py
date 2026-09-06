@@ -22,9 +22,9 @@ LOG_PATH = os.path.join(DATA_DIR, "verdicts.jsonl")
 # The LLM no longer writes the verdict, so what this log measures changed with
 # it. It records where the
 # written assessment reads the evidence differently from the score that decided,
-# which is where the bugs turn up: Moonstone Sleet scored LOW on ATT&CK coverage
-# while the agent read HIGH off four unanimous VirusTotal verdicts, and the agent
-# was right. Those rows are still the cheapest place to find a scoring blind
+# which is where the bugs turn up: a group can score LOW on ATT&CK coverage
+# while its chained samples come back unanimously malicious. Those rows are
+# still the cheapest place to find a scoring blind
 # spot, and they no longer come at the cost of a reproducible verdict.
 #
 # Rows written before that change carry decided_by "agent", meaning the agent's
@@ -35,10 +35,10 @@ LOG_PATH = os.path.join(DATA_DIR, "verdicts.jsonl")
 #
 # A label copied from a feed the engine already queries measures agreement with
 # that feed, not correctness. The labels that carry information are the ones the
-# feeds did not supply: briansclub.cm was a carding marketplace with zero
-# VirusTotal detections, thekinsmenservers.com a legitimate host the model
-# flagged, eversxcellence.co.za compromised rather than attacker-owned. Those
-# took analyst judgement, which is exactly why they are worth recording.
+# feeds did not supply: a marketplace with no detections against it, a
+# legitimate host the model flagged, a site compromised rather than
+# attacker-owned. Those take analyst judgement, which is why they are worth
+# recording.
 TRUTH_SOURCES = {"analyst", "feed", "published"}
 
 

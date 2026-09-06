@@ -34,11 +34,10 @@ ALIAS_FULL_MARKS = 9
 SAMPLE_VOLUME_FULL_MARKS = 50
 
 # The live domain model. v2c is the variant trained without the VirusTotal
-# features — those three columns are one number viewed three ways, and alone
-# they score AUC 0.96, so a model leaning on them cannot say anything
-# VirusTotal has not already said. briansclub.cm is the case: zero VirusTotal
-# detections, called benign at p=0.010 by the VirusTotal-dependent variant and
-# flagged at 0.962 by this one.
+# features: those three columns are one number viewed three ways and score well
+# on their own, so a model leaning on them cannot say anything VirusTotal has
+# not already said. Excluding them is what lets the model flag a domain with no
+# detections against it.
 #
 # Change this tag to swap variants; the models keep their own column lists, so
 # nothing else needs touching.
@@ -111,14 +110,12 @@ class ConfidenceScorer:
         row = pd.DataFrame([features])
 
         # A feature vector of all zeros means no source answered, not that the
-        # indicator looks suspicious. The two are indistinguishable to the model
-        # and it resolves them the wrong way: an unregistered domain scored
-        # 0.7507 HIGH, because a domain with no registration date, no
-        # nameservers and no MX has the same vector as one registered today.
-        #
-        # domain_age_known was added to carry that distinction and cannot, since
-        # the model gives it an importance of 0.002. The guard belongs here
-        # rather than in a feature.
+        # indicator looks suspicious. The two are indistinguishable to the
+        # model, which resolves them as suspicious: a domain with no
+        # registration date, no nameservers and no MX has the same vector as one
+        # registered today. domain_age_known cannot carry the distinction on its
+        # own, since the model gives it almost no weight, so the guard belongs
+        # here rather than in a feature.
         trained = list(gb.feature_names_in_)
         if not any(float(features.get(column, 0) or 0) for column in trained):
             return {
@@ -145,12 +142,9 @@ class ConfidenceScorer:
         # mail, stable DNS, and malicious only in what it serves. The feeds
         # answer exactly that question and the engine already queries them.
         #
-        # raspberryhillsshop.com is why this is not left to the agent.
-        # ThreatFox rated it ClearFake at confidence 100 and the model scored it
-        # 0.1394. On one run the agent overrode to HIGH; on the next it emitted
-        # no THREAT LEVEL line at all, so the score stood unopposed and a listed
-        # ClearFake domain resolved LOW. The safety net cannot be a model that
-        # sometimes declines to answer.
+        # Applied here rather than left to the agent. A feed listing is
+        # deterministic evidence, and the safety net for a blind spot cannot be
+        # a component that sometimes declines to answer.
         #
         # A floor rather than a blend, matching the graph and temporal layers.
         # Positive evidence only raises: a benign domain has no listing, so the
@@ -188,9 +182,8 @@ class ConfidenceScorer:
         }
  
     # Relevant, deduplicated pulses earning full marks when ATT&CK has nothing.
-    # Measured on filtered counts: NoName057 27, Handala 25, KillNet 12,
-    # CyberVolk 11. Modest on purpose — a genuinely new actor may have a handful
-    # on day one, and the point is to register it exists at all.
+    # Modest on purpose: a genuinely new actor may have only a handful on day
+    # one, and the point is to register that it exists at all.
     COMMUNITY_PULSE_FULL_MARKS = 15
 
     def _score_group_from_community(self, pivot_result: dict, results: dict) -> dict:
@@ -373,9 +366,9 @@ class ConfidenceScorer:
         }
 
     # VirusTotal detections earning full marks on an address. Deliberately low,
-    # and much lower than the file threshold, because VirusTotal is slow on fresh
-    # infrastructure: ten Aisuru C2 addresses that abuse.ch rated confidence 100
-    # were carrying 1 to 3 detections out of roughly 52 engines.
+    # and much lower than the file threshold, because VirusTotal is slow on
+    # fresh infrastructure: an address a feed rates at high confidence commonly
+    # carries only a handful of detections.
     IP_DETECTION_FULL_MARKS = 6
 
     # URLhaus entries earning full marks. A host serving five known malware URLs
@@ -385,11 +378,10 @@ class ConfidenceScorer:
     # Ceiling each source can reach on its own, combined by noisy-OR rather than
     # averaged.
     #
-    # Averaging was the first attempt and it reproduced the bug this codebase
-    # keeps finding. URLhaus answering "not found" scored zero and was folded
-    # into the mean, which dragged a ThreatFox confidence-100 Cobalt Strike C2
-    # down to 0.475 MEDIUM. But URLhaus tracks malware URLs, not C2 addresses,
-    # so its silence about a C2 is expected and says nothing about the address.
+    # Averaging reproduces the absence bug: a source answering "not found"
+    # scores zero and is folded into the mean, dragging a high-confidence
+    # listing down. URLhaus tracks malware URLs rather than C2 addresses, so its
+    # silence about a C2 is expected and says nothing about the address.
     #
     # Noisy-OR treats each source as independent evidence FOR maliciousness. A
     # source with nothing to report contributes exactly nothing instead of
@@ -468,12 +460,11 @@ class ConfidenceScorer:
         detections = vt.get("malicious_votes", 0) or 0
         pulses = otx.get("pulse_count") or 0
 
-        # URLhaus scales an address by how many malicious URLs it carries, but a
-        # URL pivot asks query_url about the exact URL and that response has no
-        # url_count field at all. A confirmed listing therefore read as zero:
-        # http://190.123.46.208/Okami.x86 scored 0.039 LOW on a URL URLhaus
-        # names, and only the agent's override made it HIGH. A direct listing is
-        # one reported URL and earns full marks rather than a fifth of them.
+        # URLhaus scales an address by how many malicious URLs it carries, but
+        # a URL pivot asks query_url about the exact URL and that response has
+        # no url_count field, so a confirmed listing would otherwise read as
+        # zero. A direct listing is one reported URL and earns full marks rather
+        # than a fifth of them.
         if pivot_result.get("type") == "url":
             url_count = 1 if uh.get("found") else 0
             urlhaus_signal = float(url_count)

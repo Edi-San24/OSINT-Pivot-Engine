@@ -130,8 +130,8 @@ class OTXConnector:
                 # OTX's own verdict on whether it will accept this indicator.
                 # Non-empty means it sits in a whitelisted prefix or is otherwise
                 # rejected, and a pulse containing it will silently drop it.
-                # Nothing else the engine queries knows this: 178.128.173.150 was
-                # ThreatFox Aisuru at confidence 100, and OTX refused it anyway.
+                # Nothing else the engine queries knows this, and a
+                # high-confidence feed listing elsewhere does not change it.
                 "otx_validation": [
                     v.get("message") or v.get("name")
                     for v in (data.get("validation") or [])
@@ -165,12 +165,13 @@ class OTXConnector:
     def _relevant_pulses(self, pulses: list, query: str) -> list:
         """
         Keeps the pulses actually about the query, deduplicated by title.
-        Measured relevant-of-returned: Lynx 9/50, KillNet 12/50, Handala 25/50.
-        The rest are bulk feeds that merely contain the term.
+        Most of what a search returns is bulk feeds that merely contain the
+        term, so the filter usually discards the majority.
         """
-        # Word boundary, not containment, so "Lynx" misses "Lynxware". A generic
-        # name still pulls in Hidden Lynx and Cosmic Lynx — name ambiguity, not a
-        # filter failure, and the counts stay visible either way.
+        # Word boundary rather than containment, so a short name does not match
+        # a longer word containing it. A generic name still pulls in unrelated
+        # actors sharing it, which is name ambiguity rather than a filter
+        # failure, and the counts stay visible either way.
         needle = re.compile(rf"\b{re.escape(query.strip())}\b", re.IGNORECASE)
 
         relevant, seen_titles = [], set()
@@ -231,8 +232,9 @@ class OTXConnector:
                 "type": "pulse_search",
                 "source": "otx",
                 "found": bool(pulses),
-                # Relevant and deduplicated, not the API's total — that counts
-                # every unrelated pulse containing the term. Lynx reports 784.
+                # Relevant and deduplicated rather than the API's own total,
+                # which counts every unrelated pulse containing the term and can
+                # run into the hundreds.
                 "pulse_count": len(pulses),
                 "pulse_count_reported": data.get("count", len(returned)),
                 "pulses_screened": len(returned),

@@ -203,10 +203,9 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             if record_type == "a" and ip and is_ipv4(ip) and ip not in visited:
                 new_indicators.append(ip)
 
-        # Where the domain points now. Chained alongside passive DNS, not
-        # instead of it: a domain with no history still resolves, and reading
-        # only passive DNS stopped salviadivinorumseeds.net at one pivot while
-        # its two live addresses sat unexamined in the same result.
+        # Where the domain points now. Chained alongside passive DNS rather
+        # than instead of it: a domain with no history still resolves, so
+        # reading only passive DNS would leave its live addresses unexamined.
         for ip in (results.get("dns", {}) or {}).get("a", []) or []:
             if is_ipv4(ip) and ip not in visited:
                 new_indicators.append(ip)
@@ -638,9 +637,8 @@ def analyze_results(state: AgentState) -> AgentState:
 #
 # Infrastructure seeds already get chain awareness from graph_scorer, which runs
 # across every pivot. Group, software and identity seeds skip it, so their score
-# came from the seed pivot alone. Moonstone Sleet scored 0.2498 on ATT&CK
-# coverage — 1 of 23 software entries — while four of its chained Qilin samples
-# came back unanimously malicious on VirusTotal, and none of that counted.
+# came from the seed pivot alone, so a group with thin ATT&CK coverage scored
+# low even when its chained samples came back unanimously malicious.
 #
 # Indirect evidence, since it is the tooling that was measured and not the actor,
 # so it lifts and never lowers.

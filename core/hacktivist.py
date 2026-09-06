@@ -5,9 +5,9 @@ import re
 
 from core.detector import HACKTIVIST_GROUPS
 
-# Every structured OTX field — industries, targeted_countries, malware_families,
-# tags, adversary — is empty for these actors. The titles carry it all:
-# "Pro-Russian Group Killnet Targets Romanian Government Websites with DDoS".
+# Every structured OTX field, industries through adversary, is empty for these
+# actors. The pulse title carries all of it, in the shape
+# "Pro-<country> Group <name> Targets <country> <sector> With DDoS".
 
 # Alignment is the most diagnostic signal. APT and ransomware reporting almost
 # never uses this vocabulary; hacktivist reporting leads with it.
@@ -164,9 +164,9 @@ _IDEOLOGICAL_ACTIVITIES = {"DDoS", "defacement"}
 MAX_EVIDENCE = 4
 
 # Country names appear for two opposite reasons and a plain match cannot tell
-# them apart. "Pro-Russian Killnet Targets Romanian Government" names Russia as
-# alignment and Romania as target; "Russian hacktivist group" and
-# "HANDALA-Iranian Nexus Actor" name origin. Attribution is stripped first, so
+# them apart. "Pro-<country> ... Targets <country> Government" names the first
+# as alignment and the second as target, while "<country> hacktivist group" and
+# "<name>-<country> Nexus Actor" name origin. Attribution is stripped first, so
 # only what is left counts as targeting.
 #
 # Deliberately narrow: the noun has to be the actor itself. "Russian banks" and

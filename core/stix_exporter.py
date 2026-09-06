@@ -198,11 +198,10 @@ class STIXExporter:
 # --- OTX pulse export ------------------------------------------------------
 #
 # A second export format. An investigation result holds every indicator the
-# pivot chain touched, including passive DNS neighbours of the seed. Handing
-# that file to OTX's extractor produced 41 indicators of which 39 were wrong,
-# 24 of them naming unrelated businesses sharing a server with the victim. A
-# pulse is a curated claim, so only what the agent investigated goes in, and
-# everything dropped is recorded with a reason.
+# pivot chain touched, including passive DNS neighbours of the seed, so handing
+# the raw file to an extractor publishes unrelated parties sharing a server with
+# the target. A pulse is a curated claim: only what the agent investigated goes
+# in, and everything dropped is recorded with a reason.
 
 # OTX indicator type names, keyed by the engine's own types.
 
@@ -472,8 +471,8 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
     """
     # Both forms are carried: the lowercased key matches and deduplicates, the
     # original is what gets published. URL paths are case-sensitive, so
-    # publishing the folded form emitted http://host/okami.x86 for a payload
-    # actually served at /Okami.x86 — an indicator that cannot match anything.
+    # publishing the folded form yields an indicator that cannot match the
+    # request it was taken from.
     investigated: list[tuple[str, str, dict]] = []
     for investigation in investigations:
         for name in investigation.get("visited", []):
