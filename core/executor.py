@@ -4,6 +4,7 @@
 
 
 import ipaddress
+import re
 import time
 import logging
 from urllib.parse import urlparse
@@ -462,6 +463,25 @@ class PivotExecutor:
             )
 
             chainable = chainable[:MAX_TOOLING_LOOKUPS]
+            # The actor's own name alongside its ATT&CK tooling. abuse.ch labels
+            # samples by actor for well known groups, and those names do not
+            # always match what ATT&CK calls the tooling, so querying tooling
+            # alone can miss the whole attributed corpus. Kept separate from the
+            # tooling results: a sample labelled with the actor is attributed to
+            # them, while a sample of commodity tooling they happen to use is
+            # not, and the two must not read alike.
+            # ATT&CK appends "Group" or "Team" to names abuse.ch records
+            # without it, so the bare form is tried alongside the full one.
+            actor_names = {group_name.strip()}
+            trimmed = re.sub(r"\s+(group|team)$", "", group_name.strip(),
+                             flags=re.IGNORECASE)
+            if trimmed and trimmed != group_name.strip():
+                actor_names.add(trimmed)
+            results["malwarebazaar_actor"] = _run_parallel({
+                name: (lambda n=name: self.bazaar.query_signature(n))
+                for name in sorted(actor_names)
+            })
+
             if chainable:
                 logger.info(f"Querying MalwareBazaar for group tooling: {chainable}")
                 tasks = {

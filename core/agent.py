@@ -248,6 +248,17 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
                 new_indicators.append(sha256)
 
     elif indicator_type == "threat_group":
+        # Samples labelled with the actor's own name come first: they are
+        # attributed to the group, where a sample of commodity tooling the
+        # group also uses is not.
+        for bazaar_result in (results.get("malwarebazaar_actor") or {}).values():
+            if not isinstance(bazaar_result, dict):
+                continue
+            for sample in bazaar_result.get("samples", []):
+                sha256 = sample.get("sha256", "")
+                if sha256 and sha256 != "unknown" and sha256 not in visited:
+                    new_indicators.append(sha256)
+
         # Sample hashes from the group's tooling, so the pivot continues into
         # live samples rather than dead-ending at ATT&CK.
         for bazaar_result in results.get("malwarebazaar_tooling", {}).values():
@@ -456,6 +467,22 @@ def extract_findings(result: dict) -> list[str]:
             f"{indicator}: {related.get('sample_count', 0)} related samples share "
             "this malware family tag."
         )
+
+    # Samples abuse.ch attributes to the actor by name, which is a stronger
+    # claim than a sample of tooling the actor is known to use.
+    for name, actor_result in (results.get("malwarebazaar_actor") or {}).items():
+        if not isinstance(actor_result, dict) or not actor_result.get("found"):
+            continue
+        total = actor_result.get("sample_count", 0)
+        qualifier = "+" if actor_result.get("count_at_api_ceiling") else ""
+        findings.append(
+            f"{indicator}: MalwareBazaar attributes {total}{qualifier} samples to "
+            f"this actor by name."
+        )
+        tags = sorted({t for s in actor_result.get("samples", [])
+                       for t in s.get("tags", []) or []})
+        if tags:
+            findings.append(f"{indicator}: actor sample tags — {', '.join(tags[:8])}.")
 
     # Threat group tooling chained into MalwareBazaar by pivot_group
     tooling = results.get("malwarebazaar_tooling")
