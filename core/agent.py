@@ -29,6 +29,7 @@ from core.risk import (
     NON_INFRASTRUCTURE_TYPES,
     DEFAULT_THRESHOLDS,
     enforce_verdict,
+    is_cdn_edge,
     is_routable_ip,
     resolve_risk_level,
 )
@@ -134,7 +135,9 @@ def is_ipv4(value: str) -> bool:
     """
     if not re.match(r"^(\d{1,3}\.){3}\d{1,3}$", value):
         return False
-    return is_routable_ip(value)
+    # A CDN edge address is shared with most of the web, so it identifies
+    # nothing and following it spends the depth budget for no reach.
+    return is_routable_ip(value) and not is_cdn_edge(value)
  
  
 def is_domain(value: str) -> bool:
@@ -656,16 +659,26 @@ def analyze_results(state: AgentState) -> AgentState:
             state["pivot_queue"].append(actor)
             logger.info(f"NER queued threat actor: {actor}")
 
-    # Advance queue — take the first candidate we have not already pivoted on
+    # Advance the queue, preferring infrastructure over another sample.
+    #
+    # Strict order starves the scarcer type. A single sample pivot queues ten
+    # related samples and a handful of hosts, so within one round the queue is
+    # almost entirely hashes and the depth budget is spent without an address or
+    # domain ever being reached. Infrastructure is rarer, outlives any one
+    # sample, and is what makes the result a map rather than a list, so it is
+    # taken first while order is preserved within each group.
     state["should_continue"] = False
     if state["pivot_count"] < config.MAX_PIVOT_DEPTH:
-        while state["pivot_queue"]:
-            candidate = state["pivot_queue"].pop(0)
-            if candidate not in state["visited"]:
-                state["current_seed"] = candidate
-                state["should_continue"] = True
-                logger.info(f"Advancing to next indicator: {candidate}")
-                break
+        pending = [c for c in state["pivot_queue"] if c not in state["visited"]]
+        infrastructure = [c for c in pending if is_ipv4(c) or is_domain(c)]
+        candidate = (infrastructure or pending or [None])[0]
+        if candidate:
+            state["pivot_queue"] = [c for c in state["pivot_queue"] if c != candidate]
+            state["current_seed"] = candidate
+            state["should_continue"] = True
+            logger.info(f"Advancing to next indicator: {candidate}")
+        else:
+            state["pivot_queue"] = []
 
     if not state["should_continue"]:
         logger.info("No unvisited indicators remaining. Moving to summarize.")

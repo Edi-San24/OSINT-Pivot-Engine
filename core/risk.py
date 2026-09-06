@@ -87,6 +87,32 @@ def last_seen_within(record: dict, days: int = TENANCY_WINDOW_DAYS) -> bool:
     return (time.time() - stamp) <= days * 86400
 
 
+# CDN edge ranges. A seed resolving only into one of these exposes no origin, so
+# passive DNS, Shodan and the co-tenant chain have nothing to work with. An
+# address in these ranges is also shared with most of the web, so it is never an
+# indicator.
+CDN_RANGES = tuple(ipaddress.ip_network(n) for n in (
+    # Cloudflare
+    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+    "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+    "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+    "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+    # Fastly
+    "151.101.0.0/16", "199.232.0.0/16",
+    # Akamai
+    "23.32.0.0/11", "23.192.0.0/11", "104.64.0.0/10", "184.24.0.0/13",
+))
+
+
+def is_cdn_edge(value: str) -> bool:
+    """Whether an address belongs to a shared CDN edge range."""
+    try:
+        address = ipaddress.ip_address(value.strip())
+    except ValueError:
+        return False
+    return any(address in network for network in CDN_RANGES)
+
+
 def is_routable_ip(value: str) -> bool:
     """
     Whether an address can actually host anything.
