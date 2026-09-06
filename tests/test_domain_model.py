@@ -46,8 +46,8 @@ from core.scorer import ConfidenceScorer
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "reality_check.json")
 
 # Ground truth, and what it means. "benign" here is a claim about the
-# infrastructure, not about everything ever served from it — see eversxcellence
-# below, where those two answers differ.
+# infrastructure rather than about everything ever served from it, and the two
+# answers differ for a compromised site.
 CONFIRMED_MALICIOUS = {
     "briansclub.cm",    # carding marketplace, long-lived, zero VirusTotal detections
     "shhsift.click",    # newly registered, invoice-themed path, VT 4/55
@@ -538,10 +538,9 @@ def main() -> int:
     check(silent.get("risk_level") == "UNKNOWN",
           f"an address no source answered on -> {silent.get('risk_level')}")
 
-    # The suite previously scored only through ConfidenceScorer, so the blending
-    # layers were never exercised and a bug there went unseen for as long as it
-    # existed: two layers holding no data cut shhsift.click from 0.9529 to
-    # 0.5003, turning a confirmed malicious domain into MEDIUM.
+    # Exercised through the blending layers rather than through
+    # ConfidenceScorer alone, since a layer holding no data must leave a
+    # confident score untouched rather than averaging it down.
     print("\n-- blending amplifies, and never subtracts --")
     graph, temporal = GraphScorer(), TemporalScorer()
     confident = 0.9529
