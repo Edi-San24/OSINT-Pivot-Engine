@@ -158,6 +158,15 @@ SECTOR_PATTERNS = {
 
 _HACKTIVIST_KEYWORD = re.compile(r"\b(?:hacktivis[tm]|hacktivists|cyber\s?partisan)\b", re.I)
 
+# Espionage language, which rules the assessment out. Alignment wording appears
+# in state-actor reporting just as readily as in hacktivist reporting, so a
+# phrase naming intelligence work is the discriminator between the two.
+_ESPIONAGE_KEYWORD = re.compile(
+    r"\b(?:cyber[\s-]?spy|cyber[\s-]?espionage|espionage|state[\s-]?sponsored|"
+    r"nation[\s-]?state|intelligence service|\bapt\b|advanced persistent)\b",
+    re.I,
+)
+
 # DDoS and defacement pay nothing, so a crew doing only those is ideological.
 _IDEOLOGICAL_ACTIVITIES = {"DDoS", "defacement"}
 
@@ -218,6 +227,7 @@ def assess(group_name: str, pulses: list[dict]) -> dict:
     countries: dict[str, int] = {}
     sectors: dict[str, int] = {}
     keyword_hits = 0
+    espionage_hits = 0
     evidence: list[str] = []
 
     for pulse in pulses or []:
@@ -250,6 +260,8 @@ def assess(group_name: str, pulses: list[dict]) -> dict:
 
         if _HACKTIVIST_KEYWORD.search(text):
             keyword_hits += 1
+        if _ESPIONAGE_KEYWORD.search(text):
+            espionage_hits += 1
 
         if (found_alignments or found_activities) and len(evidence) < MAX_EVIDENCE:
             title = re.sub(r"\s+", " ", pulse.get("name") or "").strip()
@@ -259,11 +271,24 @@ def assess(group_name: str, pulses: list[dict]) -> dict:
     activity_labels = sorted(activities, key=lambda a: _SEVERITY_RANK.get(a, 99))
     ideological_only = bool(activity_labels) and set(activity_labels) <= _IDEOLOGICAL_ACTIVITIES
 
-    # Alignment, roster, and the explicit keyword are each conclusive. DDoS or
-    # defacement alone is suggestive only — a criminal crew can do both.
-    if on_roster or alignments or keyword_hits:
+    # The roster and the explicit keyword are conclusive on their own. Alignment
+    # is not: reporting describes a state actor's allegiance in the same words it
+    # describes a crew's, so alignment counts only alongside observed hacktivist
+    # activity. Espionage language vetoes the rest, since an actor described as
+    # conducting intelligence work is not a hacktivist crew whatever its
+    # allegiance. DDoS or defacement alone is suggestive only, because a criminal
+    # crew can do both.
+    espionage_only = espionage_hits and not keyword_hits and not on_roster
+
+    if on_roster or keyword_hits:
         is_hacktivist = True
         confidence = "high" if (alignments and activity_labels) or on_roster else "medium"
+    elif espionage_only:
+        is_hacktivist = False
+        confidence = "none"
+    elif alignments and activity_labels:
+        is_hacktivist = True
+        confidence = "high"
     elif ideological_only:
         is_hacktivist = True
         confidence = "low"

@@ -9,6 +9,8 @@ import logging
 import re
 import time
 
+from urllib.parse import urlparse
+
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
 from langchain_anthropic import ChatAnthropic
@@ -246,6 +248,17 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             sha256 = sample.get("sha256", "")
             if sha256 and sha256 != "unknown" and sha256 not in visited:
                 new_indicators.append(sha256)
+
+        # The hosts URLhaus recorded serving this sample. A hash pivot that
+        # reaches the staging infrastructure and does not follow it leaves the
+        # more durable half of the campaign unexamined, since a sample rotates
+        # far faster than the host distributing it.
+        for entry in (results.get("urlhaus") or {}).get("urls") or []:
+            host = urlparse(entry.get("url") or "").hostname or ""
+            if not host or host in visited:
+                continue
+            if is_ipv4(host) or is_domain(host):
+                new_indicators.append(host)
 
     elif indicator_type == "threat_group":
         # Samples labelled with the actor's own name come first: they are
