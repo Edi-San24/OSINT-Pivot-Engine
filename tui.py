@@ -44,10 +44,9 @@ from core.risk import extract_dissent, extract_threat_level, resolve_risk_level
 
 ACCENT = "#17375E"
 
-# Derived from ACCENT rather than picked separately, so the scheme stays one
-# colour. BORDER is the accent lifted until it reads against the background:
-# #17375E on #0b1220 is nearly invisible as a one-cell line, which is why every
-# panel edge used to disappear. GLOW is for focus and the active spinner.
+# Derived from ACCENT so the scheme stays one colour. BORDER is the accent
+# lifted far enough to read as a single-cell line against the background; GLOW
+# carries focus, panel titles and the active spinner.
 SURFACE = "#0e1728"
 BORDER = "#2b537f"
 GLOW = "#5b9bd5"
@@ -55,9 +54,8 @@ MUTED = "#7d8ba3"
 HISTORY_PATH = PROJECT_ROOT / ".tui_history.json"
 HISTORY_LIMIT = 10
 
-# MEDIUM abbreviates in the dissent position only. The sidebar leaves 38
-# columns, and the widest row this can produce, UNKNOWN>HIGH, has to fit
-# beside a readable seed.
+# MEDIUM abbreviates in the dissent position only, so the widest row the
+# sidebar can produce still fits beside a readable seed.
 DISSENT_ABBREV = {"HIGH": "HIGH", "MEDIUM": "MED", "LOW": "LOW", "UNKNOWN": "UNK"}
 
 # Ten frames at a 0.1s interval gives exactly one revolution per second.
@@ -150,10 +148,9 @@ def entry_level(entry: dict) -> str:
     """
     The level a history row shows, re-derived rather than read back.
 
-    The stored risk_level is a cache of a derivation, and it went stale when the
-    verdict stopped coming from the agent: entries saved while an override was
-    possible listed one level and opened at another. The detail view already
-    re-derives, so deriving here too is what makes the two agree.
+    The stored risk_level is a cache of a derivation and can go stale when the
+    scoring rules change. The detail view re-derives, so deriving here too keeps
+    the list and the detail in agreement.
     """
     result = entry.get("result")
     if not isinstance(result, dict) or "context_score" not in result:
@@ -166,10 +163,9 @@ def entry_agent_level(entry: dict) -> str | None:
     """
     What the agent read, when it differs from the row's verdict. None otherwise.
 
-    Two eras of saved entry answer this differently. A run since the verdict
-    became deterministic states its own read on a DISSENT line. An older one
-    put it on the THREAT LEVEL line, because back then that line was the
-    agent's and it was what decided the level.
+    Two eras of saved entry answer this differently. A current run states its
+    own read on a DISSENT line; an older one put it on the THREAT LEVEL line,
+    which was the agent's at the time.
     """
     result = entry.get("result")
     if not isinstance(result, dict):
@@ -180,8 +176,8 @@ def entry_agent_level(entry: dict) -> str | None:
     if dissent:
         return dissent
 
-    # Pre-deterministic entry: the stated level is the agent's own only when it
-    # disagrees with the score, which is exactly the override case.
+    # On an older entry the stated level is the agent's own only where it
+    # disagrees with the score.
     stated = extract_threat_level(summary)
     if stated and stated != entry_level(entry):
         return stated
@@ -402,9 +398,8 @@ class MainScreen(Screen):
                         allow_blank=False,
                         id="depth",
                     )
-                    # Checkbox rather than Switch: the glyph and its label are
-                    # one widget on one row, and an X reads unambiguously where
-                    # a borderless slider does not say which end is set.
+                    # Checkbox rather than Switch: glyph and label are one
+                    # widget on one row, and the checked state is unambiguous.
                     yield Checkbox("Deep scan (SpiderFoot)", id="deep")
                     yield Checkbox("Export STIX 2.1", id="stix")
                     yield Checkbox("Save full JSON", id="save-json")
@@ -415,10 +410,9 @@ class MainScreen(Screen):
                     yield ListView(id="history")
             with Vertical(id="results-panel"):
                 # auto_scroll off so a fresh result reads from the top rather
-                # than jumping to the end of the summary. min_width matters:
-                # RichLog defaults to 78 and the panel's inner width here is
-                # about 69, so every summary was rendered nine columns too wide
-                # and silently clipped behind a horizontal scrollbar.
+                # than jumping to the end. min_width is set low because RichLog
+                # defaults to 78, wider than this panel, which clips the summary
+                # behind a horizontal scrollbar.
                 yield RichLog(id="results", wrap=True, markup=True,
                               highlight=False, auto_scroll=False, min_width=20)
         yield Footer()
@@ -426,7 +420,7 @@ class MainScreen(Screen):
     def on_mount(self) -> None:
         self.title = "OSINT Pivot Engine"
         self.sub_title = "Autonomous threat intelligence"
-        # Titles ride the panel borders rather than costing a row each.
+        # Panel titles ride the borders rather than costing a row each.
         self.query_one("#input-panel").border_title = "Investigate"
         self.query_one("#history-panel").border_title = "Recent"
         self.query_one("#results-panel").border_title = "Results"
@@ -449,8 +443,8 @@ class MainScreen(Screen):
             seed = entry.get("seed", "")
 
             # The verdict, then the agent's read beside it when the two differ.
-            # Padding is measured on the plain text, since the markup around it
-            # does not occupy columns.
+            # Padding is measured on the plain text, since markup occupies no
+            # columns.
             verdict = f"[{colour}]{level}[/{colour}]"
             if agent:
                 short = DISSENT_ABBREV.get(agent, agent)
@@ -665,15 +659,15 @@ class OsintPivotTUI(App):
     Footer {{ background: {ACCENT}; }}
     Footer > .footer--key {{ background: {BORDER}; color: white; }}
 
-    /* Bottom padding is load-bearing: without it the sidebar runs flush
-       into the footer and the last history row is clipped in half. */
+    /* Bottom padding keeps the sidebar off the footer, which would otherwise
+       clip the last history row. */
     #body {{ height: 1fr; padding: 1 1 1 1; }}
 
     /* 44 fits "Deep scan (SpiderFoot)" without truncating. */
     #sidebar {{ width: 44; min-width: 38; }}
 
-    /* One panel treatment, three panels. Titles ride the border, which is why
-       the header rows inside each panel could go. */
+    /* One treatment for all three panels. Titles ride the border rather than
+       costing a header row inside each. */
     #input-panel, #history-panel, #results-panel {{
         border: round {BORDER};
         border-title-color: {GLOW};
@@ -696,11 +690,10 @@ class OsintPivotTUI(App):
     #seed:focus {{ border: tall {GLOW}; }}
     #depth {{ margin-bottom: 1; }}
 
-    /* One row per toggle instead of three. A Switch is height 3 for its
-       border, and four cost twelve rows of a thirty-five row sidebar, which
-       starved the Recent panel to one visible entry. Stripping the border to
-       reclaim them left the slider with no track, so on and off both read as a
-       filled block; a Checkbox carries its own glyph and does not. */
+    /* One row per toggle. A Switch is height 3 for its border, and four of
+       them crowd out the Recent panel; stripping that border leaves the slider
+       with no track, so on and off look alike. A Checkbox carries its own
+       glyph on one row. */
     Checkbox {{
         height: 1;
         border: none;
@@ -710,8 +703,8 @@ class OsintPivotTUI(App):
     }}
     Checkbox:focus {{ background: {ACCENT}; }}
     /* Only the checked state is coloured. Textual hides the unchecked glyph by
-       drawing it in the button's own background colour, so setting the colour
-       unconditionally made every box render a permanent X. */
+       drawing it in the button's own background colour, so colouring both
+       states would render a permanent X. */
     Checkbox > .toggle--button {{ background: #0b1220; }}
     Checkbox.-on > .toggle--button {{ color: {GLOW}; background: #0b1220; }}
 

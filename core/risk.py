@@ -13,20 +13,15 @@ NON_INFRASTRUCTURE_TYPES = {
     "threat_group", "software", "email", "username", "filename"
 }
 
-# The scorer is authoritative for every type. There used to be a narrower set of
-# types the agent could not overrule, which meant the LLM decided the verdict on
-# domains, addresses, URLs, hashes and identities. It is non-deterministic, so
-# the same investigation resolved differently on repeat runs, and that became the
-# largest single source of error measured. resolve_risk_level no longer reads the
-# summary; the agent's read is recorded as dissent and shown, never applied.
+# The scorer is authoritative for every indicator type. resolve_risk_level reads
+# no summary, so the verdict is reproducible; the agent's own read is recorded as
+# dissent and displayed, never applied.
 #
-# One case genuinely lost something. score_identity is min(finding_count / 50,
-# 1.0), a measure of how much SpiderFoot returned rather than of how dangerous
-# the identity is: one finding scores 0.02 whether the handle belongs to nobody
-# or to a ransomware group's spokesperson. The scorer already answers UNKNOWN at
-# zero findings, and there is no principled cut point above that, so a thin
-# identity result now resolves LOW on a number that does not mean LOW. Dissent
-# is the only signal on those, and it is not a verdict.
+# Identities are the weak case. score_identity is min(finding_count / 50, 1.0),
+# which measures how much SpiderFoot returned rather than how dangerous the
+# identity is, so a thin result resolves LOW on a number that does not mean LOW.
+# The scorer answers UNKNOWN at zero findings and there is no principled cut
+# point above that.
 
 
 # Used when a result carries no thresholds of its own: anything saved before the
@@ -68,11 +63,7 @@ BASE_RATES = {"domain": 0.504}
 # How recently a name must have resolved to an address to count as a current
 # tenant of it. Passive DNS keeps names for years, so without a window the
 # tenancy check answers "who was ever here" rather than "who is here now".
-#
-# Lives here rather than in stix_exporter, where it started, because both the
-# publisher and PivotExecutor.screen ask the same question and the exporter
-# consumes what the executor produces, so importing upward would invert the
-# layering.
+# Shared by the publisher and by PivotExecutor.screen.
 TENANCY_WINDOW_DAYS = 45
 
 
@@ -80,10 +71,9 @@ def last_seen_within(record: dict, days: int = TENANCY_WINDOW_DAYS) -> bool:
     """
     Whether a passive DNS record was observed inside the window.
 
-    Sources disagree on units — DNSDB reports epoch seconds, mnemonic reports
-    milliseconds — so anything implausibly large is rescaled. A record carrying
-    no timestamp counts as current, since absence of a date is not evidence the
-    neighbour has gone.
+    Sources disagree on units, so an implausibly large stamp is rescaled from
+    milliseconds. A record carrying no timestamp counts as current, since
+    absence of a date is not evidence the neighbour has gone.
     """
     raw = record.get("last_seen") or record.get("time_last")
     if not raw:
@@ -102,20 +92,16 @@ def is_routable_ip(value: str) -> bool:
     Whether an address can actually host anything.
 
     False for reserved, private, multicast, loopback and documentation space,
-    and for anything that is not an address at all. `scorer` has guarded this
-    since the RFC 5737 fix, but only at scoring time, and two layers upstream
-    were spending real work on space that cannot host: shiabank.com poisons
-    passive DNS with randomised junk and burned 3 of its 5 pivots on 0.x
-    addresses, and the same records were offered for publication as
-    HIGH-confidence indicators.
+    and for anything that is not an address at all. Applied wherever an address
+    is about to cost work: selecting a pivot, and selecting an indicator to
+    publish.
     """
     try:
         address = ipaddress.ip_address(value.strip())
     except ValueError:
         return False
-    # is_global alone lets multicast through, because Python defines it as the
-    # complement of private and 224.0.0.0/4 is in neither list. 230.128.42.66
-    # came out of the poisoned zone and would have passed.
+    # is_global alone admits multicast, since Python defines it as the
+    # complement of private and 224.0.0.0/4 is in neither list.
     return address.is_global and not address.is_multicast and not address.is_reserved
 
 

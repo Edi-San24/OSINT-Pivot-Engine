@@ -278,7 +278,7 @@ class OTXConnector:
         payload = {
             "name": title,
             "description": description,
-            # A boolean. OTX 400s on the int with "Must be of type boolean".
+            # A boolean. OTX rejects the integer form.
             "public": True,
             "TLP": "white",
             "tags": tags,
@@ -286,10 +286,7 @@ class OTXConnector:
             "malware_families": malware_families,
             "adversary": adversary,
             "targeted_countries": targeted_countries,
-            # Plain strings. OTX rejects a list of dicts with "Must be a list
-            # of strings ({'id': 'T1566.001'} is <class 'dict'>)". The field was
-            # absent entirely before, so a pulse built with an ATT&CK mapping
-            # published without one and nothing said so.
+            # Plain strings; OTX rejects a list of objects here.
             "attack_ids": [str(a) for a in (attack_ids or [])],
         }
  

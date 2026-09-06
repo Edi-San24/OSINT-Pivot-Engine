@@ -6,10 +6,9 @@ import requests
 from config import MAX_RESULTS_PER_SOURCE
 
 # Well inside core.executor.REQUEST_TIMEOUT, so this connector reports its own
-# error rather than the fan-out reporting a generic straggler. Neither call had
-# one: the ceiling abandons the thread but cannot interrupt it, and
-# concurrent.futures joins it at interpreter shutdown, so the CLI printed its
-# report and then hung on the socket.
+# error rather than the fan-out reporting a generic straggler. The fan-out
+# ceiling abandons a hung thread but cannot interrupt it, so the per-request
+# timeout is what actually bounds the call.
 REQUEST_TIMEOUT = 15
 
 

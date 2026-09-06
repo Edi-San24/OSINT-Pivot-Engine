@@ -74,9 +74,8 @@ def _screen_seeds(seed: str) -> None:
     """
     Screens candidates and prints the verdict with the reasoning behind it.
 
-    The reasons matter more than the verdict. A SKIP an analyst disagrees with
-    is one they can overrule, and the point is to show what the screen saw
-    rather than to gate anything.
+    The reasons matter more than the verdict: the screen reports what it saw
+    and gates nothing, so a SKIP is a recommendation an analyst can overrule.
     """
     from pathlib import Path
     from core.executor import PivotExecutor

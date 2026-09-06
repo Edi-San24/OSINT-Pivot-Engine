@@ -129,9 +129,8 @@ class CensysConnector:
         Queries crt.sh certificate transparency logs for a domain.
         Returns TLS certificate data and associated names.
 
-        Retries a 5xx as well as a timeout. The old retry fired only on
-        Timeout, so the frequent failure never reached it: a 502 raises
-        HTTPError from raise_for_status and went straight out the bottom.
+        Retries a 5xx as well as a timeout, since crt.sh fails far more often
+        with a gateway error than with a stall.
         """
         url = f"https://crt.sh/?q={domain}&output=json"
 
@@ -167,11 +166,9 @@ class CensysConnector:
                 ]
             }
 
-        # Carries an error key on purpose. This used to return
-        # certificate_count 0 with only a note, so an exhausted retry was
-        # indistinguishable from a domain with no certificates: it never
-        # appeared as a visibility gap, and the subdomains it failed to fetch
-        # read as subdomains that did not exist.
+        # Carries an error key on purpose, so an exhausted retry stays
+        # distinguishable from a domain that genuinely has no certificates and
+        # is reported as a visibility gap.
         except requests.exceptions.Timeout:
             return {
                 "error": "crt.sh timed out after 2 attempts",

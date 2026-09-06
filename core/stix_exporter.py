@@ -217,13 +217,12 @@ OTX_TYPES = {
     "email": "email",
 }
 
-# Engine types that are not OTX indicators at all. A threat group is a pulse's
-# adversary field and a malware family is its malware_families field, so both
-# were being published as indicators of a type OTX does not accept.
+# Engine types that are not OTX indicators. A threat group belongs in a pulse's
+# adversary field and a malware family in malware_families.
 NOT_OTX_INDICATORS = {"threat_group", "software", "filename", "username"}
 
-# OTX's own ceiling on the description field. It 400s the whole submission
-# above this, naming the actual length in the error.
+# OTX's ceiling on the description field. It rejects the whole submission above
+# this.
 OTX_DESCRIPTION_LIMIT = 1024
 
 # Digest length to OTX name, for pivots typed only as the generic "hash".
@@ -234,12 +233,10 @@ def otx_type(name: str, itype: str) -> str:
     """
     The OTX type name for an indicator, or "" when OTX has no type for it.
 
-    Unmapped types used to fall through as the engine's own name, so a pulse
-    shipped indicators typed `hash` and `threat_group`. OTX accepts neither and
-    drops them on upload, which is the silent-loss failure `_otx_rejection`
-    exists to prevent: the analyst believes they published something they did
-    not. `executor.pivot_hash` types every digest as `hash` regardless of
-    algorithm, so the length resolves it.
+    An unmapped type returns empty rather than falling through as the engine's
+    own name, since OTX drops an indicator it cannot type and the analyst would
+    believe they had published it. `executor.pivot_hash` types every digest as
+    `hash` regardless of algorithm, so the length resolves it.
     """
     if itype in NOT_OTX_INDICATORS:
         return ""
@@ -365,8 +362,8 @@ def _feed_listed(pivot: dict) -> str:
     Whether a feed lists this indicator itself, named so the audit can say so.
 
     Read from the saved pivot rather than queried, so it costs nothing and
-    reflects what the investigation actually saw. Distinct from
-    _is_known_malicious, which asks the same question about a neighbour.
+    reflects what the investigation saw. Distinct from _is_known_malicious,
+    which asks the same question about a neighbour.
     """
     results = pivot.get("results") or {}
 
@@ -417,10 +414,9 @@ def _corroboration(pivot: dict) -> str:
     Any independent source saying something about this indicator, named so the
     audit can quote it. Empty string when nothing does.
 
-    Deliberately broader than _feed_listed, which stays narrow because it
-    overrides bystander protection and needs abuse.ch-grade evidence. This one
-    only decides whether a discovered domain may be published, so a VirusTotal
-    detection or a community pulse is enough.
+    Broader than _feed_listed, which overrides bystander protection and so needs
+    abuse.ch-grade evidence. This only decides whether a discovered domain may be
+    published, so a VirusTotal detection or a community pulse is enough.
     """
     results = pivot.get("results") or {}
 
@@ -436,8 +432,8 @@ def _corroboration(pivot: dict) -> str:
         harmless = (results.get("virustotal") or {}).get("harmless_votes") or 0
         return f"VirusTotal {votes}/{votes + harmless}"
 
-    # pulse_count already excludes our own pulses, so this cannot corroborate
-    # a domain using a pulse we published about it earlier.
+    # pulse_count excludes our own pulses, so a pulse we published earlier
+    # cannot corroborate the domain it was about.
     otx = results.get("otx") or {}
     if (otx.get("pulse_count") or 0) > 0:
         return f"{otx['pulse_count']} OTX pulse(s)"
@@ -520,9 +516,8 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
 
         if itype == "ipv4":
             # Reserved, private, multicast and documentation space cannot host
-            # anything, so it cannot be an indicator. shiabank.com poisons
-            # passive DNS with randomised junk and this layer offered three of
-            # its 0.x addresses for publication at engine: HIGH.
+            # anything, so it cannot be an indicator. A zone that poisons passive
+            # DNS will otherwise feed such addresses straight through.
             if not is_routable_ip(name):
                 excluded.append({
                     "indicator": name,
@@ -534,12 +529,9 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
                 continue
 
             # Feed evidence on the address itself outranks the co-tenancy
-            # heuristic, and this ordering is load-bearing. On a compromised
-            # host, co-tenancy with a legitimate domain is the definition of the
-            # case rather than a reason to shield the address: 178.62.3.223, a
-            # Cobalt Strike C2 that ThreatFox holds at confidence 90 with 50
-            # corroborating honeypot pulses, was suppressed as "shared hosting"
-            # while the victim's own four domains were offered for publication.
+            # heuristic, and the ordering is load-bearing. On a compromised host,
+            # co-tenancy with a legitimate domain is the definition of the case
+            # rather than a reason to shield the address.
             listed = _feed_listed(pivot)
             if not listed:
                 tenants = _co_hosted_tenants(pivot, domains)
@@ -572,17 +564,10 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
         # investigate it, so publishing it is their claim rather than the
         # engine's inference.
         #
-        # This is the rule that would have stopped the nautadb pulse. Four
-        # co-tenants of a compromised mail host scored up to 0.9591 on VT 0/56
-        # with nothing else listing them, purely because an eight-year-old
-        # self-hosted mail box looks like minimal attacker infrastructure to the
-        # model, and the pulse would have named a real firm as running a Cobalt
-        # Strike C2. Not a hard block, because briansclub.cm is the mirror case:
-        # a confirmed carding marketplace at 0.963 with no feed, no VirusTotal
-        # detection and no pulse anywhere, which is the model's best moment. It
-        # is the seed of its own investigation and so publishes; a discovered
-        # domain lands in the audit with this reason and --include publishes it
-        # once someone has decided to.
+        # Held back rather than blocked. The model can be right where every feed
+        # is silent, and it can equally flag a small self-hosted host that is
+        # simply quiet, and those two look identical here. The reason lands in
+        # the audit and --include publishes it once someone has decided.
         is_seed = name == (investigation.get("indicator") or "").strip().lower()
         if resolved in ("domain", "hostname") and not is_seed:
             corroboration = _corroboration(pivot)
@@ -619,11 +604,9 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
     # domains is a hosting artifact and says nothing, so the corpus count from
     # DomainTools decides which is which.
     #
-    # A certificate is only a selector for the domain it belongs to, so it
-    # cannot be publishable when that domain is not. Without this the nautadb
-    # pulse still shipped three of the victim's Let's Encrypt fingerprints after
-    # the four domains had been excluded, which fingerprints the victim just as
-    # precisely as naming them would.
+    # A certificate only selects for the domain it belongs to, so it is not
+    # publishable when that domain is not: publishing it would identify that
+    # host as precisely as naming it.
     publishable = {entry["indicator"].strip().lower() for entry in included}
     for investigation in investigations:
         for pivot in investigation.get("full_results", []):
@@ -762,14 +745,10 @@ def build_pulse(investigations: list[dict], title: str, description: str,
                 remaining.append(entry)
         excluded = remaining
 
-        # A name the selector never saw at all, rather than one it dropped.
-        # Only investigated indicators are eligible for selection, so a passive
-        # DNS neighbour the chain never pivoted was not merely excluded, it was
-        # never a candidate, and --include used to do nothing for it without
-        # saying so. project0.cc and bribanking.com were both this case: the
-        # apex of a campaign's own zone, sitting on the flagged host, that the
-        # chain reached only as a neighbour. Carries a caveat because the engine
-        # genuinely has no assessment of it, so the claim is the analyst's.
+        # A name the selector never saw, rather than one it dropped. Only
+        # investigated indicators are eligible, so a passive DNS neighbour the
+        # chain never pivoted was never a candidate. Carries a caveat because the
+        # engine has no assessment of it, so the claim is the analyst's.
         for name in sorted(forced - published - reinstated):
             detected = detect_type(name) or {}
             kind = detected.get("type", "domain")
@@ -790,9 +769,8 @@ def build_pulse(investigations: list[dict], title: str, description: str,
             f"not published IOCs; OTX will extract them: {leaked[:6]}"
         )
 
-    # OTX rejects the whole submission with a 400 when the description runs
-    # long, and the pulse is written before anyone finds out. Checked here so
-    # the failure arrives at build time with the overshoot named.
+    # Checked at build time, with the overshoot named, so an over-long
+    # description surfaces when the file is written rather than on submission.
     if len(description) > OTX_DESCRIPTION_LIMIT:
         logger.warning(
             f"Description is {len(description)} chars and OTX accepts "
@@ -803,8 +781,7 @@ def build_pulse(investigations: list[dict], title: str, description: str,
     return {
         "name": title,
         "description": description,
-        # A boolean, not 1. OTX 400s on the int, so every pulse this exporter
-        # has produced would have been rejected on that field alone.
+        # A boolean. OTX rejects the integer form.
         "public": True,
         "TLP": "white",
         "tags": tags or [],
@@ -812,9 +789,8 @@ def build_pulse(investigations: list[dict], title: str, description: str,
         "indicators": [
             {"indicator": i["indicator"], "type": i["type"]} for i in included
         ],
-        # Where a threat group and a malware family actually belong. They were
-        # being emitted as indicators of a type OTX does not accept, so the
-        # actor name was both invalid and absent from the field meant for it.
+        # Where a threat group and a malware family belong, rather than in the
+        # indicator list.
         "malware_families": _families(investigations),
         "adversary": _adversary(investigations),
         "targeted_countries": [],

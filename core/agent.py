@@ -61,11 +61,10 @@ from core.relevance import assess_relevance, load_profile
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
  
-# Global instances
-# The timeout is not optional. Unbounded, a stalled summary call wedges the
-# whole run: a 33-case evaluate.py sat 3 hours on one ESTABLISHED socket having
-# finished 6 cases. SUMMARY_ATTEMPTS below cannot help, since a call that never
-# returns never raises either.
+# Global instances.
+# The timeout is required: an unbounded summary call can wedge the whole run,
+# and SUMMARY_ATTEMPTS cannot help because a call that never returns never
+# raises.
 llm = ChatAnthropic(
     model="claude-fable-5-1",
     api_key=ANTHROPIC_API_KEY,
@@ -73,10 +72,9 @@ llm = ChatAnthropic(
     max_retries=1,
 )
 
-# The summary call returns empty content without raising, seen once in four
-# identical calls. Retried because the verdict surviving is not enough: a lost
-# summary takes the DISSENT line with it, and that is the only channel for a
-# compromised site no feed has caught yet.
+# The summary call can return empty content without raising. Retried because a
+# lost summary takes the DISSENT line with it, which is the only channel for a
+# compromised site no feed has caught.
 SUMMARY_ATTEMPTS = 2
 SUMMARY_BACKOFF = 1.5
  
@@ -126,12 +124,11 @@ class AgentState(TypedDict):
  
 def is_ipv4(value: str) -> bool:
     """
-    A dotted quad that is worth spending a pivot on.
+    A dotted quad worth spending a pivot on.
 
-    Routability is part of the question here, not a separate check. The shape
-    test alone let shiabank.com spend 3 of its 5 pivots on 0.x addresses it had
-    published to poison passive DNS, so the chain reached one real host instead
-    of four.
+    Routability is part of the question, not a separate check: a zone that
+    poisons passive DNS publishes addresses that cannot host anything, and the
+    shape test alone would spend the depth budget on them.
     """
     if not re.match(r"^(\d{1,3}\.){3}\d{1,3}$", value):
         return False
@@ -145,10 +142,9 @@ def is_domain(value: str) -> bool:
     ))
  
  
-# Blocks that go in the prompt carrying nothing the prompt can use. DNSDB
-# returns its raw API shape as "rrsets" alongside the normalized "records", and
-# they are the same data: nothing in the engine reads rrsets, so sending both
-# spent 2,072 of 12,552 input tokens on a duplicate.
+# Result blocks the prompt cannot use. DNSDB returns its raw API shape as
+# "rrsets" alongside the normalized "records", which carry the same data, and
+# nothing in the engine reads rrsets.
 PROMPT_DROP_KEYS = {"rrsets"}
 
 
@@ -238,9 +234,8 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
 
     elif indicator_type == "ipv4":
         for record in records:
-            # Either key: passivedns.query_ip emits "domain", DNSDB emits both.
-            # Reading only "ip" here meant an address never chained a single
-            # co-tenant, and the pivot looked like passive DNS had nothing.
+            # Either key: passivedns.query_ip emits "domain" and DNSDB emits
+            # both, so reading one alone would chain no co-tenants at all.
             value = record.get("domain") or record.get("ip") or ""
             if value and is_domain(value) and value not in visited:
                 new_indicators.append(value)
@@ -862,9 +857,8 @@ def summarize(state: AgentState) -> AgentState:
     # looking result: no error, findings present, and a score-derived risk level
     # that read as a confident verdict. The investigation is still usable — the
     # scoring layers ran — but the gap has to be visible rather than blank.
-    # Empty content counts as a failure, not as a short answer. It arrives with
-    # no exception, so retrying only on raise left the one observed failure mode
-    # unhandled.
+    # Empty content counts as a failure rather than a short answer. It arrives
+    # with no exception, so a retry on raise alone would not catch it.
     content = ""
     for attempt in range(SUMMARY_ATTEMPTS):
         try:
@@ -874,10 +868,9 @@ def summarize(state: AgentState) -> AgentState:
                     "text": system_prompt,
                     # The only content identical between investigations. Caching
                     # is a prefix match and everything after it is unique per
-                    # run, so this breakpoint is the whole opportunity: measured
-                    # at 953 of 12,552 input tokens on a 3-pivot domain, which
-                    # is 7.6%. Hits only when runs land inside the 5 minute TTL,
-                    # so an evaluate.py sweep benefits and a lone pivot does not.
+                    # run, so this breakpoint is the whole opportunity. It hits
+                    # only when runs land inside the cache TTL, so a batch sweep
+                    # benefits and a single pivot does not.
                     "cache_control": {"type": "ephemeral"},
                 }]),
                 HumanMessage(content=user_message)

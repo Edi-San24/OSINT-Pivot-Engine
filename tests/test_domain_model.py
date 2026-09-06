@@ -12,9 +12,9 @@ Three classes of regression this catches, all of which have already happened:
   - A retrain that quietly starts calling legitimate businesses malicious. The
     first domain model scored a legitimate hosting provider at p=1.000 because
     its benign class was 114 household-name domains.
-  - The LLM moving the verdict. It used to overrule the score, so the same
-    investigation resolved differently on repeat runs. The verdict checks run
-    before the model gate, because determinism does not depend on a model.
+  - The LLM moving the verdict. The score decides alone, so the same
+    investigation resolves the same way on repeat runs. These checks run before
+    the model gate, since determinism does not depend on a model.
 
 The fixture carries real pivot results so extract_features is exercised too, not
 just the model. Licensed source blocks are stripped from it — they never feed a
@@ -95,15 +95,13 @@ def check_actor_designators() -> None:
     An actor name a vendor actually publishes has to resolve to threat_group.
 
     Checked against every group name and alias in the shipped ATT&CK bundle
-    rather than against a handful of examples, because the failures were whole
-    naming schemes rather than one-offs: 33 designators resolved to "username"
-    so the executor refused the seed, and Mandiant's TEMP.<Word> parsed as
-    label.tld so eight actors were routed to the domain pivot and asked of DNS.
-    APT-C-36 is Blind Eagle and APT-C-43 is Machete's own alias.
+    rather than a handful of examples, since the failure mode is a whole naming
+    scheme going unrecognised: an unmatched designator is refused by the
+    executor, and one that parses as a hostname is routed to the domain pivot.
 
-    The other half is the guard. Digit counts stay per-scheme so a handle
-    ending in digits is not swept up, which is what keeps 154 single-word
-    aliases correctly reading as usernames rather than being forced.
+    The guard is the other half. Digit counts stay per-scheme so a handle ending
+    in digits is not swept up, which keeps single-word aliases reading as
+    usernames rather than being forced.
     """
     print("\n-- published actor designators resolve to threat_group --")
 
@@ -126,8 +124,8 @@ def check_actor_designators() -> None:
         got = (detect_type(handle) or {}).get("type")
         check(got != "threat_group", f"{handle:10} -> {got}")
 
-    # The whole bundle, so a future pattern change cannot quietly misroute an
-    # actor into an infrastructure pivot.
+    # The whole bundle, so a pattern change cannot quietly misroute an actor
+    # into an infrastructure pivot.
     fixture = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            "data", "enterprise-attack.json")
     if not os.path.exists(fixture):
@@ -152,13 +150,12 @@ def check_publication_gate(entries: dict) -> None:
     A domain the chain discovered needs a source other than our own model
     before it reaches a pulse. The seed does not.
 
-    Both halves of this are load-bearing and they pull opposite ways. Four
-    co-tenants of a compromised mail host scored up to 0.9591 on VT 0/56 with
-    nothing else listing them, and publishing them would have named a real firm
-    as running a Cobalt Strike C2. But briansclub.cm is a confirmed carding
-    marketplace at 0.963 with no feed, no detection and no pulse anywhere,
-    which is the model beating every source at once. The seed exemption is what
-    lets the second publish while the first does not.
+    Both halves pull opposite ways. A quiet self-hosted domain can score high
+    on infrastructure alone with no source agreeing, and publishing it would
+    name an uninvolved party. But the model is also sometimes right where every
+    feed is silent, and that is its most valuable case. The seed exemption is
+    what separates them: the analyst chose the seed, the engine merely reached
+    the rest.
     """
     print("\n-- an uncorroborated domain publishes only as the seed --")
 
@@ -221,11 +218,8 @@ def check_seed_formats() -> None:
     A seed the analyst can actually paste has to resolve to a type.
 
     ThreatFox publishes C2s as host:port and its browse page is the documented
-    place to get fresh seeds, but neither the ipv4 nor the domain pattern
-    accepted a port. 217.60.102.3:56003 detected as nothing, so the executor
-    refused it, no source was ever asked, and the verdict came back UNKNOWN on
-    an address ThreatFox held at confidence 75 as PureRAT. The connectors want
-    the host, so the detector returns the host and the executor uses it.
+    place to get fresh seeds, so that form has to resolve. The connectors want
+    the host, so the detector returns the host and carries the port alongside.
     """
     print("\n-- a pasteable seed resolves to a type --")
 
@@ -489,9 +483,7 @@ def main() -> int:
     # today. Reserved space cannot host anything, so "checked, nothing found"
     # misdescribes it.
     # The model cannot see a compromised legitimate site, and the agent is not a
-    # reliable backstop: on one run it overrode raspberryhillsshop.com to HIGH
-    # and on the next it emitted no THREAT LEVEL line, so a ThreatFox
-    # confidence-100 ClearFake domain resolved LOW on a 0.1394 score.
+    # reliable backstop for it, so feed evidence has to floor the score.
     print("\n-- feed evidence floors the model, and only upward --")
     listed = scorer.score_any({
         "indicator": "compromised.example", "type": "domain",

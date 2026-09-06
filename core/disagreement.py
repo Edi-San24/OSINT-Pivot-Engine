@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 LOG_PATH = os.path.join(DATA_DIR, "verdicts.jsonl")
 
 # The LLM no longer writes the verdict, so what this log measures changed with
-# it. It used to record which of two deciders won. It now records where the
+# it. It records where the
 # written assessment reads the evidence differently from the score that decided,
 # which is where the bugs turn up: Moonstone Sleet scored LOW on ATT&CK coverage
 # while the agent read HIGH off four unanimous VirusTotal verdicts, and the agent

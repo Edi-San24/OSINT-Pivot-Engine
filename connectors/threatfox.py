@@ -16,8 +16,8 @@ BASE_URL = "https://threatfox-api.abuse.ch/api/v1/"
 # single C2 address can carry several near-identical rows.
 MAX_ENTRIES = 10
 
-# Rows kept per cluster query. A tag or a family can carry thousands, and what
-# these queries are for is the shape of the set, not every member of it.
+# Rows kept per cluster query. A tag or family can carry thousands, and these
+# queries are for the shape of the set rather than every member.
 MAX_CLUSTER_ENTRIES = 500
 
 
@@ -164,19 +164,18 @@ class ThreatFoxConnector:
             return {**base, "error": "query returned no row list"}
         entries = rows[:MAX_CLUSTER_ENTRIES]
 
-        # C2 rows arrive as host:port, and every connector downstream wants the
-        # host. Split here so a caller can pivot without re-parsing, and count
-        # unique hosts separately: one address commonly carries several rows.
+        # C2 rows arrive as host:port and every connector downstream wants the
+        # host, so the split happens here. Unique hosts are counted separately,
+        # since one address commonly carries several rows.
         hosts, seen = [], set()
         for row in entries:
             ioc = (row.get("ioc") or "").strip()
             if not ioc:
                 continue
             host, _, port = ioc.rpartition(":")
-            # A colon left in the host means this was an IPv6 address rather
-            # than a host:port, unless it came bracketed. Splitting 2001:db8::1
-            # on the last colon yields host 2001:db8: and port 1, which is a
-            # queryable-looking address that is not the one listed.
+            # A colon left in the host means IPv6 rather than host:port, unless
+            # it arrived bracketed. Splitting on the last colon would otherwise
+            # yield a queryable-looking address that is not the one listed.
             if not host or not port.isdigit() or (":" in host and not host.startswith("[")):
                 host, port = ioc, ""
             host = host.strip("[]")
@@ -216,18 +215,15 @@ class ThreatFoxConnector:
             "malware_families": dict(sorted(families.items(), key=lambda kv: -kv[1])),
             "threat_types": sorted(threat_types),
             # Who reported the set, and how much each contributed. A tag can be
-            # one hunter's batch label rather than an actor cluster: erebus-v14
-            # returned 39 rows across Cobalt Strike, Meterpreter and Sliver, all
-            # from one reporter, which is a detection method and not a campaign.
-            # A caller treating that as an actor cluster would be wrong, and the
-            # only way to see it is the reporter spread.
+            # one hunter's batch label rather than an actor cluster, and a single
+            # reporter spanning several unrelated families is the signal for
+            # that. Nothing else in the response reveals it.
             "reporters": dict(sorted(reporters.items(), key=lambda kv: -kv[1])),
             "first_seen": first_seen[0] if first_seen else "unknown",
             "last_seen": first_seen[-1] if first_seen else "unknown",
-            # ThreatFox's own compromised flag, aggregated. Read it as a floor
-            # and never as a clearance: all 64 rows under nation-state-hunter
-            # carried False, including an address whose passive DNS showed eight
-            # unbroken years of mail service on the same host.
+            # ThreatFox's own compromised flag, aggregated. A floor rather than
+            # a clearance: it is frequently False on hosts whose passive DNS
+            # shows years of ordinary service.
             "flagged_compromised": sum(1 for h in hosts if h.get("is_compromised")),
         }
 

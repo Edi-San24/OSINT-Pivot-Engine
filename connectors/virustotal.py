@@ -5,11 +5,9 @@
 import requests
 from config import VIRUSTOTAL_API_KEY, MAX_RESULTS_PER_SOURCE
 
-# Well inside core.executor.REQUEST_TIMEOUT. Three of these calls had no
-# timeout, so a stalled socket outlived the pivot: the fan-out ceiling abandons
-# the thread but cannot interrupt it, and concurrent.futures joins it at
-# interpreter shutdown. The report printed, then the CLI hung until the OS gave
-# up on the socket. Measured 30s against a 2s ceiling in a reproduction.
+# Well inside core.executor.REQUEST_TIMEOUT. The fan-out ceiling abandons a
+# hung thread but cannot interrupt it, so the per-request timeout is what
+# actually bounds the call and lets the process exit.
 REQUEST_TIMEOUT = 15
 
 

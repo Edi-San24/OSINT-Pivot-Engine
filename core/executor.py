@@ -66,13 +66,10 @@ CHAINABLE_TOOLS = {
 # Caps the MalwareBazaar lookups fired per threat group pivot.
 MAX_TOOLING_LOOKUPS = 5
 
-# CDN edge ranges. A seed resolving into one of these exposes no origin, so
-# passive DNS, Shodan and the co-tenant chain have nothing to work with and a
-# pivot spends its budget for nothing. Knight Office put 25 of 26 lure domains
-# behind Cloudflare and the whole investigation reached one real host.
-#
-# Blocking or publishing an address in these ranges would also hit every other
-# site behind the same edge, which is most of the web.
+# CDN edge ranges. A seed resolving only into one of these exposes no origin, so
+# passive DNS, Shodan and the co-tenant chain have nothing to work with. An
+# address in these ranges is also shared with most of the web, so it is never an
+# indicator.
 CDN_RANGES = tuple(ipaddress.ip_network(n) for n in (
     # Cloudflare
     "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
@@ -85,15 +82,14 @@ CDN_RANGES = tuple(ipaddress.ip_network(n) for n in (
     "23.32.0.0/11", "23.192.0.0/11", "104.64.0.0/10", "184.24.0.0/13",
 ))
 
-# Co-tenant counts that decide whether an address is worth a pivot. Zero current
-# neighbours is a dead end, a handful means the address is close to dedicated
-# and its neighbours are leads, and a crowd means shared hosting where every
-# neighbour is a bystander rather than a lead.
+# Co-tenant count above which an address reads as shared hosting, where a
+# neighbour is a bystander rather than a lead. Zero current neighbours is a dead
+# end; a handful means the address is close to dedicated.
 SCREEN_TENANT_CEILING = 8
 
 # Independent OTX authors above which the enumeration work is already done
-# elsewhere. Authors rather than pulses: a bulk feed publishes daily and would
-# otherwise read as saturation coverage of something nobody has examined.
+# elsewhere. Counted by author rather than by pulse, since a bulk feed publishes
+# daily and would otherwise read as saturation coverage.
 SCREEN_PULSE_CEILING = 3
 
 # Threat group discovery gets a longer ceiling than the default fan-out.
@@ -102,10 +98,9 @@ SCREEN_PULSE_CEILING = 3
 # calls and run three connectors, so the extra wait is affordable here and
 # nowhere else.
 #
-# Sized for two OTX attempts: 65s each plus a 2s backoff is 132s, and at 75s
-# the retry added for its 504s was abandoned mid-flight, which is no retry at
-# all. Nothing slows down on the happy path, since as_completed returns when
-# the batch finishes and only reaches this ceiling if a source really hangs.
+# Sized for two OTX attempts at 65s each plus backoff, so its retry can complete.
+# Nothing slows on the happy path: as_completed returns when the batch finishes
+# and only reaches this ceiling if a source hangs.
 GROUP_DISCOVERY_TIMEOUT = 140
  
  
@@ -161,9 +156,8 @@ def _record_seed_port(results: dict, port: int) -> None:
     """
     Keeps the port from a host:port seed, which the pivot itself drops.
 
-    ThreatFox names a C2 as host:port and the connectors can only be asked
-    about the host, so without this the report never says which service was
-    reported. Recorded like url_parts: context for the write-up, and nothing
+    ThreatFox names a C2 as host:port and the connectors are asked only about
+    the host, so the port is kept here for the write-up. Context only; nothing
     scores on it.
     """
     if not port:
@@ -575,10 +569,9 @@ class PivotExecutor:
         Whether a candidate seed is worth a full pivot, without spending one.
 
         Deliberately cheap: DNS, passive DNS, OTX and the two abuse.ch feeds,
-        and no VirusTotal at all, so a list of fifty candidates costs no daily
-        quota. Answers the three questions that decided every wasted
-        investigation so far — is there an origin to pivot to, are the
-        neighbours leads or bystanders, and has somebody already mapped this.
+        and no VirusTotal, so a list of candidates costs no daily quota. Answers
+        three questions: is there an origin to pivot to, are the neighbours leads
+        or bystanders, and has somebody already mapped this.
         """
         validation = self.validate(seed)
         if not validation["valid"]:
@@ -622,8 +615,8 @@ class PivotExecutor:
             )
             blocking = True
 
-        # Current neighbours only. Passive DNS keeps names for years, and the
-        # question is who is here now, not who ever was.
+        # Current neighbours only: the question is who is here now, not who
+        # ever was.
         records = list((results.get("passivedns") or {}).get("records") or [])
         records.extend((results.get("dnsdb") or {}).get("records") or [])
         neighbours = {
@@ -644,9 +637,8 @@ class PivotExecutor:
                 reasons.append(f"{len(neighbours)} current co-tenant(s), chainable")
 
         # Distinct authors, not pulse count. A bulk feed publishes one pulse per
-        # day naming thousands of addresses, and counting those as coverage
-        # skipped 178.62.3.223 on "50 OTX pulses, already mapped" when all 50
-        # were one honeypot feed and nobody had looked at it at all.
+        # day naming thousands of addresses, which would otherwise read as
+        # thorough coverage of something nobody has examined.
         otx = results.get("otx") or {}
         pulses = otx.get("pulse_count")
         authors = {
@@ -673,8 +665,8 @@ class PivotExecutor:
         if listed:
             reasons.append(f"listed by {listed}, so a score will mean something")
         else:
-            # Not blocking on its own. No listing cannot distinguish undiscovered
-            # from unremarkable, which is a weak seed rather than a bad one.
+            # Not blocking on its own: no listing cannot distinguish
+            # undiscovered from unremarkable, which is weak rather than bad.
             reasons.append("no feed listing, so a quiet result will be unreadable")
 
         failed = sorted(n for n, p in results.items()

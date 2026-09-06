@@ -106,31 +106,25 @@ KNOWN_THREAT_GROUPS = {
 
     # Aliases shaped like a handle rather than a designator, so no pattern can
     # reach them without also claiming every username ending in digits.
-    # OilRig, VOID MANTICORE and Saint Bear respectively.
     "irn2", "karmabelow80", "lorec53",
 
-    # Mandiant's TEMP.<Word> scheme parses as label.tld, so these eight were
-    # detected as domains and routed to the domain pivot, which then asked DNS
-    # and WHOIS about "temp.hex". Listed rather than patterned: `temp\.[a-z]+`
-    # would claim temp.com and temp.io along with them, and detection is
-    # case-insensitive so the capital cannot be the discriminator.
+    # Mandiant's TEMP.<Word> scheme parses as label.tld and would otherwise be
+    # read as a domain. Listed rather than patterned: `temp\.[a-z]+` would claim
+    # temp.com and temp.io too, and detection is case-insensitive so the capital
+    # cannot be the discriminator.
     "temp.hex", "temp.isotope", "temp.jumper", "temp.mixmaster",
     "temp.periscope", "temp.reaper", "temp.veles", "temp.zagros",
 
-    # Punctuation no pattern should chase. Real ATT&CK actors that resolved to
-    # no type at all, so the executor refused the seed outright.
+    # Punctuation no pattern should chase, so they are named directly.
     "lapsus$", "dev#popper", "admin@338",
 
 } | HACKTIVIST_GROUPS
 
 # Naming conventions rather than names, so a pattern covers actors no list keeps
-# up with. Digit counts are per-scheme so short handles are not swept up: APT1
-# and FIN7 are real, "ta5" and "g1" are likelier to be usernames.
-# Each alternative is one vendor's scheme, with that scheme's own digit count.
-# Checked against every group name and alias in the ATT&CK bundle: 33 real
-# designators were resolving to "username", so the executor refused them and the
-# pivot never ran. APT-C-36 is Blind Eagle and APT-C-43 is Machete's own alias,
-# so the whole Qihoo family was unreachable.
+# up with. Each alternative is one vendor's scheme with that scheme's own digit
+# count, so short handles are not swept up: APT1 and FIN7 are real, "ta5" and
+# "g1" are likelier to be usernames. Verified against every group name and alias
+# in the shipped ATT&CK bundle.
 ACTOR_DESIGNATOR = re.compile(
     r"^(?:"
     r"(?:apt|fin)[\s\-._]?\d{1,3}"                     # APT1, APT28, FIN7
@@ -148,10 +142,9 @@ ACTOR_DESIGNATOR = re.compile(
 
 _WHITESPACE = re.compile(r"\s")
 
-# ThreatFox publishes C2s as host:port, and that is what a copy from its browse
+# ThreatFox publishes C2s as host:port, which is what a copy from its browse
 # page pastes. Neither the ipv4 nor the domain pattern accepts a port, so the
-# seed matched nothing, the pivot never ran, and the verdict read UNKNOWN on an
-# address ThreatFox held at confidence 75 as PureRAT.
+# form is matched here and split to the host.
 HOST_PORT = re.compile(r"^(?P<host>[^\s:/]+):(?P<port>\d{1,5})$")
 
 # Second-level public suffixes, so stripping a hostname to its registrable
@@ -239,9 +232,8 @@ def _host_port(seed: str) -> dict | None:
     """
     Splits a host:port C2 down to its host, which is what connectors query.
 
-    'indicator' is the host rather than the seed, so callers must use it rather
-    than the string they passed in. 'port' is carried for the report; nothing
-    scores on it.
+    'indicator' is the host rather than the seed, so callers use it rather than
+    the string they passed in. 'port' is carried for the report only.
     """
     match = HOST_PORT.match(seed)
     if not match:
@@ -294,8 +286,8 @@ def detect_type(seed: str) -> dict | None:
             confidence = "low" if indicator_type == "username" else "high"
             return _detected(seed, indicator_type, confidence)
 
-    # After the loop on purpose, so a scheme-prefixed URL keeps the url type
-    # and only a bare host:port reaches this.
+    # After the loop, so a scheme-prefixed URL keeps the url type and only a
+    # bare host:port reaches this.
     host_port = _host_port(seed)
     if host_port:
         return host_port
