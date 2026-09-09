@@ -226,6 +226,7 @@ class PivotExecutor:
 
         results = _run_parallel(tasks)
         _record_seed_port(results, port)
+        self._expand_family(results)
 
         return {"indicator": ip, "type": "ipv4", "results": results}
  
@@ -263,9 +264,36 @@ class PivotExecutor:
 
         results = _run_parallel(tasks)
         _record_seed_port(results, port)
+        self._expand_family(results)
 
         return {"indicator": domain, "type": "domain", "results": results}
- 
+
+    def _expand_family(self, results: dict) -> None:
+        """
+        Pulls the rest of a malware family's cluster when ThreatFox names one.
+
+        A pivot answers what a host is. This answers what else belongs to the
+        same set, which infrastructure relationships alone never reach: passive
+        DNS walks an address to its own past tenants, not sideways to the
+        operator's other addresses.
+
+        Runs after the fan-out because the family is only known once ThreatFox
+        has replied. Stored beside the pivot and deliberately not chained, since
+        a family can carry hundreds of hosts and the pivot budget is per
+        indicator.
+        """
+        threatfox = results.get("threatfox") or {}
+        if not threatfox.get("found"):
+            return
+
+        families = threatfox.get("malware_families") or []
+        if not families:
+            return
+
+        cluster = self.threatfox.query_malware(families[0])
+        if cluster.get("found"):
+            results["threatfox_cluster"] = cluster
+
     def _registration(self, domain: str) -> dict:
         """
         Registration data, RDAP first and port-43 WHOIS as fallback.

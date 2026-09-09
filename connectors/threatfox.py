@@ -2,6 +2,7 @@
 # Queries abuse.ch ThreatFox for IOC listings, one indicator at a time or a
 # whole cluster by tag or malware family.
 
+import ipaddress
 import logging
 
 import requests
@@ -19,6 +20,55 @@ MAX_ENTRIES = 10
 # Rows kept per cluster query. A tag or family can carry thousands, and these
 # queries are for the shape of the set rather than every member.
 MAX_CLUSTER_ENTRIES = 500
+
+# Hosts a range must hold before it is reported as a concentration. Below this
+# a shared range says more about the hosting provider than about the operator.
+MIN_NETBLOCK_HOSTS = 4
+
+
+def _netblocks(hosts: list[dict]) -> list[dict]:
+    """
+    Address concentrations within a cluster, densest first.
+
+    Buckets hosts into /24s, merges adjacent ones into the supernet they form,
+    and keeps the ranges holding several hosts. An operator provisioning in
+    bulk leaves contiguous addresses, which a flat host list hides.
+    """
+    addresses = {}
+    for entry in hosts:
+        try:
+            address = ipaddress.ip_address(entry.get("host", ""))
+        except ValueError:
+            continue
+        if address.version == 4:
+            addresses[address] = entry
+
+    if not addresses:
+        return []
+
+    covering = {ipaddress.ip_network(f"{a}/24", strict=False) for a in addresses}
+
+    blocks = []
+    for network in ipaddress.collapse_addresses(covering):
+        members = [e for a, e in addresses.items() if a in network]
+        if len(members) < MIN_NETBLOCK_HOSTS:
+            continue
+
+        ports = {}
+        for member in members:
+            if member.get("port"):
+                ports[member["port"]] = ports.get(member["port"], 0) + 1
+
+        seen = sorted(m["first_seen"] for m in members if m.get("first_seen"))
+        blocks.append({
+            "cidr": str(network),
+            "hosts": len(members),
+            "ports": dict(sorted(ports.items(), key=lambda kv: -kv[1])),
+            "first_seen": seen[0] if seen else "unknown",
+            "last_seen": seen[-1] if seen else "unknown",
+        })
+
+    return sorted(blocks, key=lambda b: -b["hosts"])
 
 
 def _is_exact(ioc: str, indicator: str) -> bool:
@@ -212,6 +262,7 @@ class ThreatFoxConnector:
             "truncated": len(rows) > MAX_CLUSTER_ENTRIES,
             "unique_hosts": len(hosts),
             "hosts": hosts,
+            "netblocks": _netblocks(hosts),
             "malware_families": dict(sorted(families.items(), key=lambda kv: -kv[1])),
             "threat_types": sorted(threat_types),
             # Who reported the set, and how much each contributed. A tag can be
