@@ -30,6 +30,11 @@ CLAUDE.md
 # The engine audit is an internal assessment: it names past defects and reads
 # as developer notes rather than documentation. Local only.
 docs/ENGINE_AUDIT.md
+
+# Run artifacts. An evaluation sweep's log names every indicator it touched and
+# every source that failed, which is a working record rather than something to
+# publish.
+*.log
 ahmia_debug.html
 .DS_Store
 test_connectors.py
