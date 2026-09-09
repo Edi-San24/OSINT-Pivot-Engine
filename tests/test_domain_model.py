@@ -330,6 +330,124 @@ def check_stix_patterns() -> None:
         check(ok, f"export() completes on a {itype} seed -> {kinds}")
 
 
+def check_quota_refusal() -> None:
+    """
+    A source refusing on quota has to be distinguishable from one that had
+    nothing to say.
+
+    They are opposite facts. A quota refusal means the indicator was never
+    checked; an empty answer means it was checked and nothing was found. The
+    engine reported both as "no data returned", which is the absence-as-fact
+    failure this codebase has fixed nine times, arriving through the one door
+    nobody had guarded: the rate limiter that does not exist.
+
+    Nothing here retries a 429. A rate limit needs a quota strategy rather than
+    a retry, and retrying into a closed window burns the rest of it.
+    """
+    import time as _time
+
+    from connectors.quota import RateLimiter, is_quota_error, quota_error
+    from connectors.virustotal import VirusTotalConnector
+
+    print("\n-- a source refusing on quota is not a source with nothing to say --")
+
+    for refusal in ("429 Client Error: Too Many Requests for url: ...",
+                    "quota exceeded for this API key",
+                    "Rate limit reached",
+                    "HTTP 422: insufficient balance"):
+        check(is_quota_error(refusal), f"recognised as a refusal -> {refusal[:34]}")
+
+    # A timeout is a failure, not a refusal, and the word "exceeded" appears in
+    # both. Reading one as the other would mislabel every slow source.
+    for failure in ("Page.press: Timeout 8000ms exceeded",
+                    "404 Client Error: Not Found",
+                    "502 Server Error: Bad Gateway",
+                    "Connection aborted"):
+        check(not is_quota_error(failure),
+              f"not mistaken for a refusal -> {failure[:34]}")
+
+    # The shaped error carries the flag, and still carries the text.
+    shaped = quota_error(Exception("429 Too Many Requests"), "1.2.3.4", "virustotal")
+    check(shaped.get("quota_exceeded") is True and "429" in shaped.get("error", ""),
+          f"a refusal is flagged and quoted -> {shaped}")
+    plain = quota_error(Exception("404 Not Found"), "1.2.3.4", "virustotal")
+    check("quota_exceeded" not in plain,
+          f"an ordinary failure carries no flag -> {plain}")
+
+    # The connector shapes a real 429 that way rather than returning zeros.
+    connector = VirusTotalConnector()
+
+    class Refused:
+        status_code = 429
+
+        def raise_for_status(self):
+            import requests
+            raise requests.exceptions.HTTPError("429 Client Error: Too Many Requests")
+
+    import connectors.virustotal as vt_module
+    original = vt_module.requests.get
+    vt_module.requests.get = lambda *a, **k: Refused()
+    try:
+        answer = connector.query_ip("1.2.3.4")
+    finally:
+        vt_module.requests.get = original
+    check(answer.get("quota_exceeded") is True,
+          f"a 429 from VirusTotal is flagged -> {answer.get('quota_exceeded')}")
+    check("malicious_votes" not in answer,
+          f"and reports no votes at all, rather than zero -> "
+          f"{answer.get('malicious_votes', 'absent')}")
+
+    # The scorer must not read a refusal as a clean result.
+    scorer = ConfidenceScorer()
+    refused_everywhere = {
+        "indicator": "77.88.99.111", "type": "ipv4",
+        "results": {
+            "virustotal": {"error": "429", "quota_exceeded": True},
+            "threatfox": {"error": "429", "quota_exceeded": True},
+            "urlhaus": {"error": "429", "quota_exceeded": True},
+            "otx": {"error": "429", "quota_exceeded": True},
+        },
+    }
+    verdict = scorer.score_from_evidence(refused_everywhere)
+    check(verdict["risk_level"] == "UNKNOWN",
+          f"an indicator nothing could check is UNKNOWN, never LOW -> "
+          f"{verdict['risk_level']}")
+
+    # And the findings say which, so the summary can cite it.
+    lines = extract_findings({
+        "indicator": "77.88.99.111", "type": "ipv4",
+        "results": {"virustotal": {"error": "429 Too Many Requests",
+                                   "quota_exceeded": True},
+                    "censys": {"error": "502 Bad Gateway"}},
+    })
+    joined = " ".join(lines)
+    check("quota" in joined.lower() and "never checked" in joined.lower(),
+          f"a refusal is reported as unchecked -> "
+          f"{[l for l in lines if 'quota' in l.lower()]}")
+    check(any("censys" in l and "no data" in l for l in lines),
+          f"and an ordinary failure still reads as no data -> "
+          f"{[l for l in lines if 'censys' in l]}")
+    check(not any("virustotal" in l and "no data" in l for l in lines),
+          "a refusal is not also filed as no data")
+
+    # The limiter spaces calls, and costs nothing when under the rate.
+    limiter = RateLimiter(per_minute=600)          # 0.1s apart
+    limiter.wait()
+    started = _time.monotonic()
+    limiter.wait()
+    spacing = _time.monotonic() - started
+    check(spacing >= 0.09, f"a second call is spaced -> {spacing:.3f}s")
+
+    idle = RateLimiter(per_minute=600)
+    started = _time.monotonic()
+    idle.wait()
+    check(_time.monotonic() - started < 0.05,
+          "the first call is not delayed")
+
+    check(RateLimiter(per_minute=0).wait() == 0.0,
+          "an unlimited source is never delayed")
+
+
 def check_override_accounting_complete() -> None:
     """
     The override record has to cover both kinds of override, keep the analyst's
@@ -1434,6 +1552,7 @@ def main() -> int:
     check_stix_patterns()
     check_forced_include_record()
     check_override_accounting()
+    check_quota_refusal()
     check_override_accounting_complete()
     check_override_fidelity()
     check_forced_include_bulk()

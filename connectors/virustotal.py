@@ -4,11 +4,17 @@
 
 import requests
 from config import VIRUSTOTAL_API_KEY, MAX_RESULTS_PER_SOURCE
+from connectors.quota import RateLimiter, VIRUSTOTAL_PER_MINUTE, quota_error
 
 # Well inside core.executor.REQUEST_TIMEOUT. The fan-out ceiling abandons a
 # hung thread but cannot interrupt it, so the per-request timeout is what
 # actually bounds the call and lets the process exit.
 REQUEST_TIMEOUT = 15
+
+# One lookup per pivot, so a chain paces itself against the free tier rather
+# than discovering the limit as a refusal. Shared across instances, since the
+# quota belongs to the key and not to the object.
+_LIMITER = RateLimiter(VIRUSTOTAL_PER_MINUTE)
 
 
 class VirusTotalConnector:
@@ -33,6 +39,7 @@ class VirusTotalConnector:
         url = f"{self.BASE_URL}/ip_addresses/{ip}"
 
         try:
+            _LIMITER.wait()
             response = requests.get(url, headers=self.headers, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
@@ -50,7 +57,7 @@ class VirusTotalConnector:
             }
         
         except requests.exceptions.RequestException as e:
-            return {"error": str(e), "indicator": ip, "source": "virustotal"}
+            return quota_error(e, ip, "virustotal")
         
     def query_domain(self, domain: str) -> dict:
         """
@@ -60,6 +67,7 @@ class VirusTotalConnector:
         url = f"{self.BASE_URL}/domains/{domain}"
 
         try:
+            _LIMITER.wait()
             response = requests.get(url, headers=self.headers, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
@@ -77,7 +85,7 @@ class VirusTotalConnector:
             }
 
         except requests.exceptions.RequestException as e:
-            return {"error": str(e), "indicator": domain, "source": "virustotal"}
+            return quota_error(e, domain, "virustotal")
 
     def query_hash(self, hash: str) -> dict:
         """
@@ -87,6 +95,7 @@ class VirusTotalConnector:
         url = f"{self.BASE_URL}/files/{hash}"
 
         try:
+            _LIMITER.wait()
             response = requests.get(url, headers=self.headers, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
@@ -108,7 +117,7 @@ class VirusTotalConnector:
             }
 
         except requests.exceptions.RequestException as e:
-            return {"error": str(e), "indicator": hash, "source": "virustotal"}
+            return quota_error(e, hash, "virustotal")
 
     def query_filename(self, filename: str) -> dict:
         """
@@ -118,6 +127,7 @@ class VirusTotalConnector:
         url = f"{self.BASE_URL}/intelligence/search"
 
         try:
+            _LIMITER.wait()
             response = requests.get(
                 url,
                 headers=self.headers,
@@ -148,4 +158,4 @@ class VirusTotalConnector:
             }
 
         except requests.exceptions.RequestException as e:
-            return {"error": str(e)[:200], "indicator": filename, "source": "virustotal"}
+            return quota_error(e, filename, "virustotal")

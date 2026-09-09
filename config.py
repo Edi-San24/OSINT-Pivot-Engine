@@ -50,6 +50,13 @@ ENV_PATH = str(PROJECT_ROOT / ".env")
 # header, and the MCP server declaration all read it from here.
 VERSION = "1.3.0"
 
+# VirusTotal's request rate, which is what paces a pivot chain: one lookup per
+# pivot. The free tier is 4 a minute, so a chain spends 15s between pivots
+# waiting. A paid key is far higher and raising this is the difference between a
+# paced chain and a fast one. Set to 0 to disable pacing entirely, which trades
+# the wait for refusals that cost you the source.
+VIRUSTOTAL_PER_MINUTE = int(os.getenv("VIRUSTOTAL_PER_MINUTE", "4"))
+
 #Agent settings
 MAX_PIVOT_DEPTH = 3 # Amount of pivots the agent can make 
 MAX_RESULTS_PER_SOURCE = 10

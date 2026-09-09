@@ -677,13 +677,27 @@ def extract_findings(result: dict) -> list[str]:
             f"{spiderfoot['finding_count']} identity findings."
         )
 
-    # Visibility gaps — name the sources that failed so summarize can cite them
-    errored = sorted(
-        name for name, payload in results.items()
-        if isinstance(payload, dict) and "error" in payload
-    )
+    # Visibility gaps — name the sources that failed so summarize can cite them.
+    #
+    # A source that refused on quota is reported separately from one that
+    # failed. They are opposite facts: a refusal means this indicator was never
+    # checked, where an empty answer means it was checked and nothing was found.
+    # Filing both as "no data" is what makes an unchecked indicator read as a
+    # clean one.
+    errored, refused = [], []
+    for name, payload in sorted(results.items()):
+        if not isinstance(payload, dict) or "error" not in payload:
+            continue
+        (refused if payload.get("quota_exceeded") else errored).append(name)
+
     if errored:
         findings.append(f"{indicator}: no data returned from {', '.join(errored)}.")
+    if refused:
+        findings.append(
+            f"{indicator}: {', '.join(refused)} refused on quota, so this "
+            f"indicator was never checked there — absence of a finding is not "
+            f"a clean result."
+        )
 
     return findings
  
