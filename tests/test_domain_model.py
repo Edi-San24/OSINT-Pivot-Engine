@@ -346,7 +346,7 @@ def check_quota_refusal() -> None:
     """
     import time as _time
 
-    from connectors.quota import RateLimiter, is_quota_error, quota_error
+    from connectors.retry import RateLimiter, is_quota_error, quota_error
     from connectors.virustotal import VirusTotalConnector
 
     print("\n-- a source refusing on quota is not a source with nothing to say --")

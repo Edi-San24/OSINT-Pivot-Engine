@@ -4,7 +4,7 @@
 
 import requests
 from config import VIRUSTOTAL_API_KEY, MAX_RESULTS_PER_SOURCE
-from connectors.quota import RateLimiter, VIRUSTOTAL_PER_MINUTE, quota_error
+from connectors.retry import RateLimiter, VIRUSTOTAL_PER_MINUTE, quota_error
 
 # Well inside core.executor.REQUEST_TIMEOUT. The fan-out ceiling abandons a
 # hung thread but cannot interrupt it, so the per-request timeout is what
