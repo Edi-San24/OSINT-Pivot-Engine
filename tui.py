@@ -37,11 +37,17 @@ from textual.widgets import (
     Select,
     Checkbox,
     Static,
+    TextArea,
 )
 
 from config import ENV_PATH, PROJECT_ROOT
 from core.render import build_metrics_table, format_summary, get_risk_color
-from core.stix_exporter import build_pulse, select_indicators
+from core.stix_exporter import (
+    build_pulse,
+    parse_exclusions,
+    parse_forced_reasons,
+    select_indicators,
+)
 from core.risk import extract_dissent, extract_threat_level, resolve_risk_level
 
 ACCENT = "#17375E"
@@ -299,6 +305,12 @@ class ExportScreen(ModalScreen[str | None]):
             yield Input(placeholder="ATT&CK IDs, comma separated (optional)",
                         id="export-attack")
             yield Static("", id="export-preview")
+            yield Label("[dim]Publish a held-back indicator anyway, one "
+                        "INDICATOR=reason per line[/dim]")
+            yield TextArea(id="export-include")
+            yield Label("[dim]Withhold one the selector kept, one "
+                        "INDICATOR or INDICATOR=reason per line[/dim]")
+            yield TextArea(id="export-exclude")
             yield Input(placeholder="Filename", id="export-path")
             yield Static("", id="export-status")
             with Horizontal(id="export-buttons"):
@@ -322,6 +334,76 @@ class ExportScreen(ModalScreen[str | None]):
         self._render_preview()
         self.query_one("#export-title", Input).focus()
 
+    @staticmethod
+    def _withheld_lines(excluded: list[dict], limit: int = 6) -> list[str]:
+        """
+        The indicators the selector held back, and why.
+
+        Named here rather than left to the audit file. Deciding to override the
+        selector is the one action in this screen that can name a third party,
+        and an analyst cannot weigh it against a count.
+
+        Capped, with the remainder stated, so a long exclusion list cannot push
+        the input fields off screen.
+        """
+        lines = []
+        for entry in excluded[:limit]:
+            reason = (entry.get("reason") or "no stated reason").strip()
+            if len(reason) > 74:
+                reason = reason[:73] + "…"
+            lines.append(f"[dim]  {entry['indicator']} — {reason}[/dim]")
+        remaining = len(excluded) - limit
+        if remaining > 0:
+            lines.append(f"[dim]  and {remaining} more, in the audit file[/dim]")
+        return lines
+
+    def _forced(self) -> dict:
+        """
+        Overrides typed into the screen, in the format --include-file reads.
+
+        Empty when nothing was typed. A malformed line raises, and _save reports
+        it rather than writing a bundle that silently dropped the override.
+        """
+        return parse_forced_reasons(
+            self.query_one("#export-include", TextArea).text
+        )
+
+    @staticmethod
+    def _accounting_lines(bundle: dict) -> list[str]:
+        """
+        What the overrides in this bundle cost, for the status line.
+
+        The CLI prints this and the screen did not, so a TUI user got the
+        record without the warning. Empty when nothing was overridden, so a
+        clean build stays quiet.
+        """
+        lines = []
+        for key, note in (
+            ("_forced_over_objection", "contradict a stated engine objection"),
+            ("_forced_unassessed", "rest on your word, with no evidence collected"),
+            ("_exclusions_unmatched", "matched nothing and withheld nothing"),
+        ):
+            names = bundle.get(key) or []
+            if names:
+                lines.append(
+                    f"[yellow]{len(names)} {note}: {', '.join(names[:4])}"
+                    + (" …" if len(names) > 4 else "")
+                    + "[/yellow]"
+                )
+        return lines
+
+    def _dropped(self) -> dict:
+        """
+        Indicators to withhold, typed into the screen.
+
+        The reason is optional here, matching the CLI: withholding costs a
+        reader some context where an unexplained override publishes a claim
+        nobody signed.
+        """
+        return parse_exclusions(
+            self.query_one("#export-exclude", TextArea).text
+        )
+
     def _render_preview(self) -> None:
         kinds: dict[str, int] = {}
         for entry in self.included:
@@ -329,10 +411,8 @@ class ExportScreen(ModalScreen[str | None]):
         summary = ", ".join(f"{n} {k}" for k, n in sorted(kinds.items())) or "none"
         lines = [f"[bold]{len(self.included)} indicator(s)[/bold]  [dim]{summary}[/dim]"]
         if self.excluded:
-            lines.append(
-                f"[dim]{len(self.excluded)} held back, with reasons, in the "
-                f"companion audit file[/dim]"
-            )
+            lines.append(f"[dim]{len(self.excluded)} held back:[/dim]")
+            lines.extend(self._withheld_lines(self.excluded))
         self.query_one("#export-preview", Static).update("\n".join(lines))
 
     @staticmethod
@@ -381,6 +461,8 @@ class ExportScreen(ModalScreen[str | None]):
                 description=description,
                 tags=self._split(self.query_one("#export-tags", Input).value),
                 attack_ids=self._split(self.query_one("#export-attack", Input).value),
+                include=self._forced(),
+                exclude=self._dropped(),
             )
         except Exception as exc:
             status.update(f"[red]Build failed: {type(exc).__name__}: {exc}[/red]")
@@ -403,6 +485,14 @@ class ExportScreen(ModalScreen[str | None]):
         except OSError as exc:
             status.update(f"[red]Could not write: {exc}[/red]")
             return
+
+        # Surfaced before the screen closes. An override warning that only
+        # reached the audit file is a warning the analyst never sees.
+        notes = self._accounting_lines(bundle)
+        if notes:
+            for line in notes:
+                self.app.notify(re.sub(r"\[/?yellow\]", "", line),
+                                severity="warning")
 
         self.dismiss(str(target))
 
