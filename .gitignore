@@ -26,6 +26,10 @@ org_profile.yaml
 
 # The project brief is working notes, not documentation. It stays local.
 CLAUDE.md
+
+# The engine audit is an internal assessment: it names past defects and reads
+# as developer notes rather than documentation. Local only.
+docs/ENGINE_AUDIT.md
 ahmia_debug.html
 .DS_Store
 test_connectors.py
