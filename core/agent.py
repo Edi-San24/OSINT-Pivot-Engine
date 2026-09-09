@@ -34,6 +34,7 @@ from core.risk import (
     resolve_risk_level,
 )
 from core import disagreement
+from core import provenance
 
 # tier.py is local-only, like the licensed connectors it detects. A public clone
 # does not have it, so a null object stands in — an engine without the module is
@@ -414,14 +415,59 @@ def extract_findings(result: dict) -> list[str]:
     if record_count:
         findings.append(f"{indicator}: {record_count} historical DNS records.")
 
-    # URLhaus — active delivery infrastructure
+    # URLhaus — active delivery infrastructure.
+    #
+    # Two answer shapes. The host query counts the URLs on an address; the URL
+    # query describes a single URL and carries no count, so reading one from it
+    # reports a confirmed live listing as zero.
     urlhaus = results.get("urlhaus", {})
     if urlhaus.get("found"):
-        online = sum(1 for u in urlhaus.get("urls", []) if u.get("status") == "online")
+        if urlhaus.get("url_count") is not None:
+            online = sum(1 for u in urlhaus.get("urls") or [] if u.get("status") == "online")
+            findings.append(
+                f"{indicator}: URLhaus lists {urlhaus.get('url_count')} malicious URLs "
+                f"({online} currently online)."
+            )
+        else:
+            state = urlhaus.get("url_status") or "status unknown"
+            tags = ", ".join(urlhaus.get("tags") or [])
+            findings.append(
+                f"{indicator}: URLhaus lists this URL as "
+                f"{urlhaus.get('threat') or 'malicious'}, currently {state}"
+                + (f", tagged {tags}." if tags else ".")
+            )
+
+        # The staged files are what the chain pivots on, so name them here or an
+        # analyst reading the findings alone never sees what was served.
+        for payload in (urlhaus.get("payloads") or [])[:5]:
+            digest = payload.get("sha256") or ""
+            if digest:
+                findings.append(
+                    f"{indicator}: serves {payload.get('file_type') or 'unknown'} "
+                    f"payload {digest}."
+                )
+
+    # The rest of the malware family this indicator belongs to. Reported as the
+    # shape of the set rather than a host list, since the point is whether the
+    # operator provisions in bulk, and the densest ranges are what a blocklist
+    # would be drawn from.
+    cluster = results.get("threatfox_cluster") or {}
+    if cluster.get("found"):
+        family = next(iter(cluster.get("malware_families") or {}), "the same family")
+        scope = "at least " if cluster.get("truncated") else ""
         findings.append(
-            f"{indicator}: URLhaus lists {urlhaus.get('url_count', 0)} malicious URLs "
-            f"({online} currently online)."
+            f"{indicator}: ThreatFox attributes {scope}{cluster.get('unique_hosts', 0)} "
+            f"other hosts to {family}, seen {cluster.get('first_seen')} to "
+            f"{cluster.get('last_seen')}."
         )
+        for block in (cluster.get("netblocks") or [])[:3]:
+            ports = ", ".join(
+                f"{port} ({count})" for port, count in list(block["ports"].items())[:3]
+            )
+            findings.append(
+                f"{indicator}: {block['hosts']} of them share {block['cidr']}"
+                + (f", on port {ports}." if ports else ".")
+            )
 
     # Our own pulses are excluded from the count by the connector. Reported
     # separately so they stay visible without reading as independent
@@ -1079,6 +1125,12 @@ def run_agent(seed: str, deep: bool = False) -> dict:
     result["tier"] = tier.active()
     result["licensed_sources"] = tier.licensed_sources()
     result["reproducible_without_licence"] = tier.reproducible_without_licence(result)
+
+    # Stamped here rather than in the front ends, because this is the one place
+    # every consumer's result is assembled. A saved investigation has to say when
+    # it was collected, what scored it, and whether its evidence still matches
+    # the digest taken at collection time.
+    provenance.stamp(result)
 
     # Logged here rather than in the front ends, so the CLI, TUI and MCP server
     # all record exactly one row per investigation.
