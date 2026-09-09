@@ -67,6 +67,20 @@ BASE_RATES = {"domain": 0.504}
 TENANCY_WINDOW_DAYS = 45
 
 
+# How recently the evidence tying an indicator to a case must have been observed
+# for that indicator to publish as current infrastructure.
+#
+# Longer than the tenancy window on purpose: names rotate off an address in
+# weeks, but an actor holds a host for months, so the same 45 days would drop
+# live infrastructure between feed updates. Two quarters is a judgement call
+# rather than a measurement, and it is the number to revisit first if pulses
+# start missing hosts that are still serving.
+#
+# A dated indicator older than this is history. An undated one is not: absence
+# of a timestamp says nothing about age, and the publisher treats it as current.
+CAMPAIGN_WINDOW_DAYS = 180
+
+
 def last_seen_within(record: dict, days: int = TENANCY_WINDOW_DAYS) -> bool:
     """
     Whether a passive DNS record was observed inside the window.

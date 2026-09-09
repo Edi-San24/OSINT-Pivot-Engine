@@ -303,8 +303,13 @@ def export_stix(seed: str, output_path: str = "") -> dict:
     if not target.is_absolute():
         target = PROJECT_ROOT / target
 
-    with contextlib.redirect_stdout(sys.stderr):
-        written = engine["STIXExporter"]().export(result, str(target))
+    # An exporter failure is reported, not raised. This runs over stdio, where an
+    # unhandled exception is a transport-level error the caller cannot read.
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            written = engine["STIXExporter"]().export(result, str(target))
+    except Exception as e:
+        return {"error": f"STIX export failed: {type(e).__name__}: {e}"}
 
     if not written:
         return {"error": "STIX export failed — exporter returned no path."}
