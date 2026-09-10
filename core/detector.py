@@ -140,6 +140,67 @@ ACTOR_DESIGNATOR = re.compile(
     re.IGNORECASE,
 )
 
+# CrowdStrike names an actor <ADJECTIVE> <ANIMAL>. The animal carries an
+# attribution in their scheme; what that attribution is stays out of here,
+# since this engine does triage and restating a vendor's country claim in a
+# detector would publish an assertion nothing in the code establishes.
+#
+# A pattern rather than a roster, because the scheme is stable and the roster
+# is not: new names arrive faster than a list is maintained, and the animal is
+# the part that identifies the scheme.
+#
+# The whitespace rule below already routes these to threat_group, so this
+# settles the confidence rather than the type. Two tokens exactly, since a
+# longer phrase ending in one of these words is likelier to be prose.
+CROWDSTRIKE_ANIMALS = (
+    "bear", "panda", "kitten", "chollima", "tiger", "crane", "buffalo",
+    "leopard", "hawk", "wolf", "lynx", "ocelot", "jackal", "spider",
+)
+
+# Adjectives that make these animals into ordinary zoology rather than an
+# actor name. Without them "polar bear" and "red panda" read as recognised
+# designators.
+#
+# A deny-list is maintainable here where a roster of actor names is not, and
+# the asymmetry is the whole argument for it: vendors coin new adversary
+# adjectives continuously, while the set of common English animal descriptors
+# is effectively closed. "golden" is deliberately absent, since GoldenJackal
+# is a tracked actor.
+ZOOLOGICAL_ADJECTIVES = {
+    "polar", "brown", "black", "grizzly", "sun", "sloth", "spectacled",
+    "red", "giant", "bengal", "siberian", "sumatran", "white", "tasmanian",
+    "sandhill", "whooping", "paper", "water", "cape", "african", "american",
+    "wild", "snow", "clouded", "amur", "sea", "sparrow", "night", "grey",
+    "gray", "timber", "arctic", "maned", "dire", "canada", "eurasian",
+    "iberian", "side", "striped", "jumping", "house", "camel", "crab",
+    "funnel", "huntsman", "recluse", "bob", "great", "greater", "lesser",
+    "common", "cave", "teddy",
+    # Scheme animals used as descriptors of another animal. "wolf spider" and
+    # "crane fly" are zoology; no vendor names an adversary by pairing two of
+    # its own animals.
+    "wolf", "crane", "tiger", "bird", "cat", "dog", "horse",
+}
+
+CROWDSTRIKE_ACTOR = re.compile(
+    r"^(?P<adjective>[a-z][a-z'\-]*)\s+(?:" + "|".join(CROWDSTRIKE_ANIMALS) + r")$",
+    re.IGNORECASE,
+)
+
+
+def _is_crowdstrike_actor(seed: str) -> bool:
+    """
+    Whether a seed matches CrowdStrike's naming scheme rather than describing
+    an animal.
+
+    A miss here costs the confidence label and nothing else: the whitespace
+    rule still routes the seed to threat_group, so a real designator wrongly
+    excluded is investigated exactly as before.
+    """
+    match = CROWDSTRIKE_ACTOR.match(seed)
+    if not match:
+        return False
+    return match.group("adjective").lower() not in ZOOLOGICAL_ADJECTIVES
+
 _WHITESPACE = re.compile(r"\s")
 
 # ThreatFox publishes C2s as host:port, which is what a copy from its browse
@@ -277,6 +338,9 @@ def detect_type(seed: str) -> dict | None:
         return _detected(seed, "threat_group", "high")
 
     if ACTOR_DESIGNATOR.match(seed):
+        return _detected(seed, "threat_group", "high")
+
+    if _is_crowdstrike_actor(seed):
         return _detected(seed, "threat_group", "high")
 
     # Structural types. Already case-agnostic — hex digests accept both cases and

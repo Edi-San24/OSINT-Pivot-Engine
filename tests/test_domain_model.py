@@ -146,6 +146,87 @@ def check_actor_designators() -> None:
           f"no ATT&CK actor routes to an infrastructure pivot -> {misrouted[:4] or 'none'}")
 
 
+def check_crowdstrike_designators() -> None:
+    """
+    CrowdStrike's <ADJECTIVE> <ANIMAL> scheme resolves as a recognised actor.
+
+    These already routed to threat_group before, via the whitespace rule that
+    catches any multi-word seed. What was missing is the distinction: an
+    arbitrary phrase and a published naming scheme both read as medium, so
+    nothing separated a real designator from a seed that merely had a space in
+    it. The scheme is matched as a pattern rather than a roster, since new
+    names arrive faster than a list is maintained.
+    """
+    print("\n-- CrowdStrike actor names resolve at high confidence --")
+
+    for name in ("FANCY BEAR", "COZY BEAR", "VOODOO BEAR", "BERSERK BEAR",
+                 "WICKED PANDA", "MUSTANG PANDA", "CHARMING KITTEN",
+                 "REFINED KITTEN", "LABYRINTH CHOLLIMA", "VELVET CHOLLIMA",
+                 "SCATTERED SPIDER", "WIZARD SPIDER", "MUMMY SPIDER",
+                 "DEADEYE JACKAL", "OCEAN BUFFALO", "OUTRIDER TIGER"):
+        got = detect_type(name) or {}
+        check(got.get("type") == "threat_group" and got.get("confidence") == "high",
+              f"{name:20} -> {got.get('type')}/{got.get('confidence')}")
+
+    # Lowercase must work too, since detection is case-insensitive everywhere
+    # else and capitalisation is a property of how fast someone types.
+    for name in ("fancy bear", "scattered spider"):
+        got = detect_type(name) or {}
+        check(got.get("confidence") == "high", f"{name:20} -> {got.get('confidence')}")
+
+    print("\n-- and the scheme does not claim every phrase with a space --")
+
+    # Still threat_group, because the whitespace rule owns an unrecognised
+    # multi-word seed, but medium rather than high: the engine has not
+    # recognised anything, it has only failed to rule it out.
+    #
+    # The zoology cases are the point. Two tokens ending in a scheme animal is
+    # not enough on its own, or every ordinary animal name reads as a tracked
+    # adversary.
+    for phrase in ("lazarus group", "some unknown crew", "the polar bear",
+                   "polar bear", "red panda", "grey wolf", "snow leopard",
+                   "water buffalo", "black widow", "brown bear",
+                   "eurasian lynx", "wolf spider", "sea leopard"):
+        got = detect_type(phrase) or {}
+        check(got.get("type") == "threat_group" and got.get("confidence") == "medium",
+              f"{phrase:20} -> {got.get('type')}/{got.get('confidence')}")
+
+    # A single token is a username however it ends. The pattern requires
+    # whitespace, so it cannot reach one.
+    for handle in ("spider", "bearman", "kitten99", "wolfpack"):
+        got = detect_type(handle) or {}
+        check(got.get("type") != "threat_group" or handle in ("spider",),
+              f"{handle:20} -> {got.get('type')}")
+
+    # Single-token roster names are checked before any pattern, so a name that
+    # is both a crew and a CrowdStrike animal keeps its roster answer.
+    got = detect_type("lynx") or {}
+    check(got.get("type") == "threat_group" and got.get("confidence") == "high",
+          f"lynx (roster, not the animal suffix) -> "
+          f"{got.get('type')}/{got.get('confidence')}")
+
+    # An adjective a vendor actually uses must not be stoplisted. GoldenJackal
+    # is tracked, so "golden" stays out of the zoology list.
+    got = detect_type("GOLDEN JACKAL") or {}
+    check(got.get("confidence") == "high",
+          f"GOLDEN JACKAL -> {got.get('confidence')}")
+
+    # Every real designator in this check must survive the zoology filter, so
+    # a future addition to that list cannot quietly demote one.
+    from core.detector import ZOOLOGICAL_ADJECTIVES
+    collisions = sorted(
+        name for name in ("FANCY BEAR", "COZY BEAR", "VOODOO BEAR",
+                          "BERSERK BEAR", "WICKED PANDA", "MUSTANG PANDA",
+                          "CHARMING KITTEN", "REFINED KITTEN",
+                          "LABYRINTH CHOLLIMA", "VELVET CHOLLIMA",
+                          "SCATTERED SPIDER", "WIZARD SPIDER", "MUMMY SPIDER",
+                          "DEADEYE JACKAL", "OCEAN BUFFALO", "OUTRIDER TIGER")
+        if name.split()[0].lower() in ZOOLOGICAL_ADJECTIVES
+    )
+    check(not collisions,
+          f"no known designator is stoplisted as zoology -> {collisions or 'none'}")
+
+
 def check_publication_gate(entries: dict) -> None:
     """
     A domain the chain discovered needs a source other than our own model
@@ -1563,6 +1644,7 @@ def main() -> int:
     check_urlhaus_answer_shapes()
     check_netblock_clustering()
     check_actor_designators()
+    check_crowdstrike_designators()
     check_malware_families()
     check_publication_gate(entries)
 
