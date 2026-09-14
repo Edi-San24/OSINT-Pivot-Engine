@@ -48,7 +48,7 @@ ENV_PATH = str(PROJECT_ROOT / ".env")
 
 # Single source of truth for the version string. The CLI banner, the help
 # header, and the MCP server declaration all read it from here.
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 # VirusTotal's request rate, which is what paces a pivot chain: one lookup per
 # pivot. The free tier is 4 a minute, so a chain spends 15s between pivots

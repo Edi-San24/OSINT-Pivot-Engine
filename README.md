@@ -3,7 +3,7 @@
 > Drop in one indicator. Get back a scored, cross-referenced threat assessment.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
-![Version](https://img.shields.io/badge/Version-1.3.0-blue)
+![Version](https://img.shields.io/badge/Version-1.4.0-blue)
 ![Interface](https://img.shields.io/badge/Interface-TUI%20%2B%20CLI-brightgreen)
 ![Connectors](https://img.shields.io/badge/Connectors-14-blue)
 ![MCP](https://img.shields.io/badge/MCP-optional-purple)
