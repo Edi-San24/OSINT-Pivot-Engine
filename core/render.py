@@ -39,6 +39,21 @@ RELEVANCE_STYLES = [
 ]
 
 
+def _shown(value, places: int = 4) -> float:
+    """
+    A score as it belongs on screen: rounded, and never negative zero.
+
+    Stored scores keep full float precision, so printing one straight from the
+    result puts a seventeen-digit figure in a table of four-decimal ones.
+    Adding zero collapses IEEE negative zero, which a rounded subtraction
+    yields whenever two values agree to `places` and differ in the last bit.
+    That case is a modifier of nothing, and it has to read as nothing: a
+    layer here can raise a score and never lower it, so a rendered -0.0
+    reports an adjustment that did not happen.
+    """
+    return round(float(value or 0.0), places) + 0.0
+
+
 def get_risk_color(risk_level: str) -> str:
     if risk_level == "HIGH":
         return "bold red"
@@ -90,9 +105,9 @@ def build_metrics_table(result: dict, verbose: bool = False) -> Table:
 
     if round(context_score, 4) != round(ml_score, 4):
         direction = "lowered" if context_score < ml_score else "raised"
-        table.add_row("Score", f"{context_score}  [dim]({direction})[/dim]")
+        table.add_row("Score", f"{_shown(context_score)}  [dim]({direction})[/dim]")
     else:
-        table.add_row("Score", str(context_score))
+        table.add_row("Score", str(_shown(context_score)))
 
     if infrastructure and infrastructure != "unknown":
         table.add_row("Infrastructure", infrastructure)
@@ -170,19 +185,29 @@ def build_metrics_table(result: dict, verbose: bool = False) -> Table:
                 f"  [dim]{score_to_risk(model_score)} band: {band:.0%} malicious{lift}[/dim]"
                 if band else ""
             )
-            table.add_row("[dim]Model score[/dim]", f"[dim]{model_score}[/dim]{measured}")
+            table.add_row("[dim]Model score[/dim]", f"[dim]{_shown(model_score)}[/dim]{measured}")
 
             # Shown as inputs rather than as a running total. The intermediate
             # value would mean importing the blenders here, and this module
             # stays free of them so a front end can render a cached result
             # without loading the engine. Both can only raise the model score.
-            table.add_row("[dim]Graph score[/dim]", f"[dim]{result.get('graph_score', 0.0)}[/dim]")
-            table.add_row("[dim]Temporal score[/dim]", f"[dim]{result.get('temporal_score', 0.0)}[/dim]")
-            table.add_row("[dim]Blended[/dim]", f"[dim]{ml_score}[/dim]")
+            table.add_row("[dim]Graph score[/dim]",
+                          f"[dim]{_shown(result.get('graph_score', 0.0))}[/dim]")
+            table.add_row("[dim]Temporal score[/dim]",
+                          f"[dim]{_shown(result.get('temporal_score', 0.0))}[/dim]")
+            table.add_row("[dim]Blended[/dim]", f"[dim]{_shown(ml_score)}[/dim]")
         else:
-            table.add_row("[dim]Base score[/dim]", f"[dim]{ml_score}[/dim]")
+            table.add_row("[dim]Base score[/dim]", f"[dim]{_shown(ml_score)}[/dim]")
 
-        delta = round(context_score - ml_score, 4)
+        # The scorer's account of a number the rows above cannot be added up
+        # to. A feed listing that floors the model replaces the score outright,
+        # so the model figure and two empty layers sit beside a larger total
+        # with nothing on screen to reconcile them.
+        note = result.get("note")
+        if note:
+            table.add_row("[dim]Note[/dim]", f"[dim]{note}[/dim]")
+
+        delta = _shown(context_score - ml_score)
         table.add_row("[dim]Context modifier[/dim]", f"[dim]{delta:+} ({infrastructure})[/dim]")
         table.add_row("[dim]Score-derived[/dim]", f"[dim]{score_level(result)}[/dim]")
         # What the summary says, and what it would have said. The first is the

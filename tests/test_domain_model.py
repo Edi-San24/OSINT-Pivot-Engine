@@ -1251,6 +1251,186 @@ def check_campaign_recency() -> None:
           f"a domain corroborated only by an old pulse is withheld -> {why[:62]}")
 
 
+def check_compromised_host_disclosure() -> None:
+    """
+    A published indicator has to say whether the host behind it was taken over.
+
+    ThreatFox answers this directly and nothing read the answer, so a victim's
+    site and an attacker's server left the selector looking identical. Both are
+    still indicators: the address serving a payload is worth blocking whoever
+    owns it, which is why this marks rather than excludes. What it changes is
+    the claim a pulse makes about who is operating the host.
+
+    Tri-state on purpose. ThreatFox not answering is not the same as ThreatFox
+    saying no, and flattening the two would report every unreachable lookup as
+    attacker-owned.
+    """
+    print("\n-- a published indicator discloses a compromised host --")
+
+    def investigation(threatfox):
+        """A seed whose own feed evidence carries the given ThreatFox answer."""
+        return {
+            "indicator": "77.88.99.111", "risk_level": "HIGH",
+            "visited": ["77.88.99.111"],
+            "full_results": [{"indicator": "77.88.99.111", "type": "ipv4",
+                              "results": {"threatfox": threatfox}}],
+        }
+
+    def entry(threatfox, target="77.88.99.111"):
+        included, _ = select_indicators([investigation(threatfox)])
+        return next((i for i in included if i["indicator"] == target), None)
+
+    taken_over = entry({"found": True, "max_confidence": 75,
+                        "malware_families": ["Remus"], "is_compromised": True})
+    check(taken_over is not None, "a compromised host is still published")
+    check(taken_over is not None and taken_over.get("compromised_host") is True,
+          f"and is marked as compromised -> {taken_over.get('compromised_host')!r}")
+
+    attacker_owned = entry({"found": True, "max_confidence": 75,
+                            "malware_families": ["Remus"], "is_compromised": False})
+    check(attacker_owned is not None
+          and attacker_owned.get("compromised_host") is False,
+          f"attacker-owned reads False, not absent -> "
+          f"{attacker_owned.get('compromised_host')!r}")
+
+    # The absence guard. URLhaus carries the listing, ThreatFox never answered,
+    # so nothing is known about who owns the host.
+    unanswered = entry({"error": "connection refused"})
+    silent, _ = select_indicators([{
+        "indicator": "77.88.99.111", "risk_level": "HIGH",
+        "visited": ["77.88.99.111"],
+        "full_results": [{"indicator": "77.88.99.111", "type": "ipv4",
+                          "results": {"threatfox": {"error": "connection refused"},
+                                      "urlhaus": {"found": True}}}],
+    }])
+    unknown = next((i for i in silent if i["indicator"] == "77.88.99.111"), None)
+    check(unknown is not None and "compromised_host" not in unknown,
+          f"a source that failed leaves the question open -> "
+          f"{unknown.get('compromised_host', 'absent')!r}")
+
+
+def check_otx_coverage_states() -> None:
+    """
+    Coverage has to weigh what an existing pulse says, not count that it exists.
+
+    An indicator can sit in a thirty-thousand-row repost carrying no family, no
+    techniques and generated tags, and a check that counts pulses calls that
+    covered. Nothing in OTX said what the indicator was, so the useful question
+    is whether anyone has named the family rather than whether anyone has listed
+    the address.
+
+    The failed-lookup state is separate for the usual reason: a timeout that
+    files as "absent" argues for publishing on a source that never answered.
+    """
+    from scripts.otx_coverage import classify, names_family
+
+    print("\n-- OTX coverage weighs attribution, not pulse count --")
+
+    FAM = ["BianLian"]
+    bulk = {"name": "ThreatFix", "description": "ransomware advisories",
+            "tags": ["mainunaware", "charrederror"], "malware_families": [],
+            "indicator_count": 34843}
+    structured = {"name": "Ransomware roundup", "description": "",
+                  "tags": [], "malware_families": ["BianLian"]}
+    titled = {"name": "BianLian C2 set, Sep 2026", "description": "",
+              "tags": [], "malware_families": []}
+    slugged = {"name": "", "description": "", "tags": ["win.bianlian"],
+               "malware_families": []}
+
+    check(classify([bulk], FAM) == "unattributed",
+          f"a 34k repost with no family reads unattributed -> {classify([bulk], FAM)}")
+    check(classify([structured], FAM) == "attributed",
+          "a pulse declaring the family reads attributed")
+    check(classify([titled], FAM) == "attributed",
+          "a pulse naming the family in its title reads attributed")
+    check(names_family(slugged, FAM),
+          "the win.bianlian slug matches the BianLian family")
+    check(classify([], FAM) == "absent", "no pulses reads absent")
+
+    # The field arrives in two shapes. Plain strings from some pulses, objects
+    # carrying display_name from others, and reading only one raised on live
+    # data while the string-only fixture passed.
+    objects = {"name": "Ransomware set", "description": "", "tags": [],
+               "malware_families": [{"id": "BianLian - S1129",
+                                     "display_name": "BianLian - S1129",
+                                     "target": None}]}
+    check(classify([objects], FAM) == "attributed",
+          f"malware_families as objects still matches -> {classify([objects], FAM)}")
+
+    # The absence guard: a lookup that did not answer is not a clean result.
+    check(classify(None, FAM) == "unknown",
+          f"a failed lookup reads unknown, not absent -> {classify(None, FAM)}")
+
+    # With no family to match on, presence cannot be weighed, so a hit must not
+    # be reported as attributed.
+    check(classify([structured], []) == "unattributed",
+          f"no declared family means nothing can be attributed -> "
+          f"{classify([structured], [])}")
+
+
+def check_score_display() -> None:
+    """
+    Scores reach the screen rounded, and a modifier of nothing reads as nothing.
+
+    Two faults in one row of output. A stored score printed straight from the
+    dict arrives as its full float repr, so a table of four-decimal figures
+    carries one seventeen-digit outlier. And the context modifier is a rounded
+    subtraction, so two values equal to four places but differing in the last
+    bit round to negative zero and display as a reduction. Both matter beyond
+    tidiness: this engine's claim is that the context and blending layers never
+    subtract, and a modifier rendered as -0.0 says one just did.
+
+    The control is a real reduction, which has to keep its sign. Suppressing
+    every minus would hide an actual downward adjustment.
+    """
+    from io import StringIO
+    from rich.console import Console
+    from core.render import build_metrics_table
+
+    print("\n-- scores render rounded, and no modifier reads as negative --")
+
+    def rendered(result):
+        console = Console(file=StringIO(), width=140, no_color=True)
+        console.print(build_metrics_table(result, verbose=True))
+        return console.file.getvalue()
+
+    base = {"indicator": "quiet.example", "indicator_type": "domain",
+            "risk_level": "MEDIUM", "model_score": 0.3022,
+            "graph_score": 0.0, "temporal_score": 0.0,
+            "summary": "THREAT LEVEL: MEDIUM"}
+
+    # Equal to four places, different in the last bit, which is what a blend
+    # followed by an unchanged context modifier actually produces.
+    text = rendered({**base, "ml_score": 0.6276364750000001,
+                     "context_score": 0.627636475})
+    check("0.6276364750000001" not in text,
+          "the full float repr does not reach the screen")
+    check("0.6276" in text, "the blended score shows at four places")
+    check("-0.0" not in text,
+          f"a modifier of nothing does not render as -0.0 -> "
+          f"{[l.strip() for l in text.splitlines() if 'modifier' in l]}")
+
+    # Control: a genuine reduction keeps its sign.
+    lowered = rendered({**base, "ml_score": 0.5, "context_score": 0.45})
+    check("-0.05" in lowered,
+          f"a real downward modifier still shows a minus -> "
+          f"{[l.strip() for l in lowered.splitlines() if 'modifier' in l]}")
+
+    # The scorer explains a score the rows cannot account for. Without it a
+    # reader sees a model score, two zeroes, and a larger total.
+    overridden = rendered({**base, "ml_score": 0.6276, "context_score": 0.6276,
+                           "note": "Feed evidence overrode the model, which "
+                                   "scored 0.3022 on infrastructure alone."})
+    check("Feed evidence overrode the model" in overridden,
+          "the scorer's own explanation of the score is displayed")
+
+    # And no empty row where there is nothing to explain.
+    plain = rendered({**base, "ml_score": 0.3022, "context_score": 0.3022})
+    check("Note" not in plain,
+          f"no Note row without a note -> "
+          f"{[l.strip() for l in plain.splitlines() if 'Note' in l]}")
+
+
 def check_stix_bundle_contract() -> None:
     """
     The bundle has to carry the whole gated indicator set, and assert only what
@@ -1640,6 +1820,9 @@ def main() -> int:
     check_export_screen_disclosure()
     check_provenance()
     check_campaign_recency()
+    check_compromised_host_disclosure()
+    check_otx_coverage_states()
+    check_score_display()
     check_stix_bundle_contract()
     check_urlhaus_answer_shapes()
     check_netblock_clustering()

@@ -473,6 +473,23 @@ def _feed_listed(pivot: dict) -> str:
     return ""
 
 
+def _compromised_host(pivot: dict) -> bool | None:
+    """
+    Whether the host behind an indicator was taken over rather than provisioned.
+
+    ThreatFox answers this per listing and no other source here does. It marks
+    rather than excludes: a compromised host still serves what it serves, so the
+    indicator stands, but the pulse cannot claim its owner runs the campaign.
+
+    None where ThreatFox has no record or did not answer. A source that was
+    never asked has not said the host is attacker-owned.
+    """
+    threatfox = (pivot.get("results") or {}).get("threatfox") or {}
+    if not threatfox.get("found"):
+        return None
+    return bool(threatfox.get("is_compromised"))
+
+
 def _parse_evidence_date(value) -> float | None:
     """
     Epoch seconds for a feed timestamp, or None when it is absent or unparseable.
@@ -799,11 +816,15 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
                 ),
             })
             continue
-        included.append({
+        entry = {
             "indicator": original,
             "type": kind,
             "engine_risk_level": investigation.get("risk_level", "unknown"),
-        })
+        }
+        compromised = _compromised_host(pivot)
+        if compromised is not None:
+            entry["compromised_host"] = compromised
+        included.append(entry)
 
     # A TLS certificate unique to an investigated domain is a safe, durable
     # selector — other analysts can hunt it directly. One shared across many
