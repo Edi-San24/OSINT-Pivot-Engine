@@ -435,17 +435,31 @@ def check_quota_refusal() -> None:
     for refusal in ("429 Client Error: Too Many Requests for url: ...",
                     "quota exceeded for this API key",
                     "Rate limit reached",
-                    "HTTP 422: insufficient balance"):
-        check(is_quota_error(refusal), f"recognised as a refusal -> {refusal[:34]}")
+                    "HTTP 422: insufficient balance",
+                    # A spent tier answers 402, which is the status code that
+                    # means payment and nothing else. Read as an ordinary
+                    # failure it becomes a source that is merely down, and a
+                    # passive DNS lookup that never ran reads as an address
+                    # with no co-tenants.
+                    "402 Client Error: Payment Required for url: "
+                    "https://api.mnemonic.no/pdns/v3/1.2.3.4",
+                    "Payment Required"):
+        check(is_quota_error(refusal), f"recognised as a refusal -> {refusal[:40]}")
 
     # A timeout is a failure, not a refusal, and the word "exceeded" appears in
     # both. Reading one as the other would mislabel every slow source.
     for failure in ("Page.press: Timeout 8000ms exceeded",
                     "404 Client Error: Not Found",
                     "502 Server Error: Bad Gateway",
-                    "Connection aborted"):
+                    "Connection aborted",
+                    # 402 is the refusal; these are not. The marker is the
+                    # phrase and never the digits, so a port or a body that
+                    # happens to contain 402 is not a spent balance.
+                    "504 Server Error: Gateway Time-out",
+                    "Read timed out. (read timeout=15)",
+                    "Connection refused to 10.0.0.1:4025"):
         check(not is_quota_error(failure),
-              f"not mistaken for a refusal -> {failure[:34]}")
+              f"not mistaken for a refusal -> {failure[:40]}")
 
     # The shaped error carries the flag, and still carries the text.
     shaped = quota_error(Exception("429 Too Many Requests"), "1.2.3.4", "virustotal")

@@ -59,6 +59,11 @@ QUOTA_MARKERS = (
     "quota",
     "rate limit",
     "insufficient balance",
+    # A spent tier answers 402, the one status code that means payment. Matched
+    # by its phrase and not by its digits: "402" appears inside ordinary text
+    # such as a port number, and a connection refused to :4025 is a failure
+    # rather than a balance. `raise_for_status` always writes the phrase.
+    "payment required",
 )
 
 
