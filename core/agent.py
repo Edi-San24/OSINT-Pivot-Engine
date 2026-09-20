@@ -468,6 +468,19 @@ def extract_findings(result: dict) -> list[str]:
                 f"{indicator}: {block['hosts']} of them share {block['cidr']}"
                 + (f", on port {ports}." if ports else ".")
             )
+            # Sharing a range and filling one are different claims. A filled
+            # block can be published as a block; hosts merely near each other
+            # have to be published one at a time.
+            dense = block.get("dense_blocks") or []
+            if dense:
+                listed = ", ".join(d["cidr"] for d in dense[:4])
+                findings.append(
+                    f"{indicator}: {len(dense)} aligned block(s) inside "
+                    f"{block['cidr']} are filled rather than merely occupied: "
+                    f"{listed}{' and more' if len(dense) > 4 else ''}, at "
+                    f"{min(d['occupancy'] for d in dense):.0%} of usable "
+                    f"addresses or better."
+                )
 
     # Our own pulses are excluded from the count by the connector. Reported
     # separately so they stay visible without reading as independent

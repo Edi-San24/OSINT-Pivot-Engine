@@ -1382,6 +1382,151 @@ def check_otx_coverage_states() -> None:
           f"{classify([structured], [])}")
 
 
+def check_dense_subnets() -> None:
+    """
+    A range holding scattered hosts and one holding packed blocks read alike.
+
+    Netblock clustering reports how many hosts share a range, which conflates
+    two cases that call for different indicators. Thirty hosts spread across a
+    /21 can only be published one at a time. The same thirty filling a handful
+    of aligned /27s can be published as those blocks, at a cost of the few
+    unoccupied addresses inside them.
+
+    The test is occupancy of an aligned prefix, not proximity: contiguity alone
+    would merge any run of addresses, while alignment is what an allocation
+    actually follows and what a defender can enter in a firewall.
+    """
+    from connectors.threatfox import _dense_subnets
+
+    print("\n-- packed blocks are distinguished from scattered hosts --")
+
+    # Eight /24s, each holding .98 through .126, which is the shape a bulk
+    # allocation leaves and aligns to a /27.
+    packed = [f"154.91.{third}.{last}"
+              for third in range(56, 64) for last in range(98, 127)]
+    found = _dense_subnets(packed)
+    cidrs = sorted(b["cidr"] for b in found)
+    check(len(found) == 8, f"eight blocks found -> {len(found)}")
+    check(cidrs and cidrs[0] == "154.91.56.96/27",
+          f"and they are the aligned /27s -> {cidrs[:2]}")
+    check(all(b["hosts"] == 29 for b in found),
+          f"each carrying its 29 hosts -> {sorted({b['hosts'] for b in found})}")
+    check(all(b["usable"] == 30 for b in found),
+          "usable excludes network and broadcast")
+
+    # The same count of hosts, spread. Nothing here is publishable as a block.
+    scattered = [f"10.{a}.{b}.{c}"
+                 for a, b, c in [(1, 1, 5), (2, 9, 30), (3, 17, 80), (4, 25, 130),
+                                 (5, 33, 180), (6, 41, 200), (7, 49, 220),
+                                 (8, 57, 240)]]
+    check(_dense_subnets(scattered) == [],
+          f"scattered hosts yield no block -> {_dense_subnets(scattered)}")
+
+    # Half a /27, taken every other address so it fills no smaller block
+    # either. Publishing this would assert the empty half on the strength of
+    # the occupied half.
+    half = [f"192.0.2.{n}" for n in range(97, 127, 2)]
+    check(_dense_subnets(half) == [],
+          f"a half-filled /27 is not reported -> {_dense_subnets(half)}")
+
+    # A run that genuinely fills an aligned block is reported as that block,
+    # and at the size it fills rather than the size it sits inside.
+    full28 = [f"198.51.100.{n}" for n in range(97, 111)]
+    got = _dense_subnets(full28)
+    check(len(got) == 1 and got[0]["cidr"] == "198.51.100.96/28",
+          f"a full /28 is reported as a /28 -> {[b['cidr'] for b in got]}")
+
+    # Absence, not an error, and never a crash on junk.
+    check(_dense_subnets([]) == [], "no addresses yields no blocks")
+    check(_dense_subnets(["not-an-address", "999.1.1.1"]) == [],
+          "unparseable input yields no blocks")
+
+
+def check_structural_patterns() -> None:
+    """
+    Three tests over a set that a per-indicator view cannot make.
+
+    Each answers a question about the set rather than about a member: whether
+    the hosts were provisioned to one recipe, whether the names were bought in
+    one transaction, and whether one string ties hosts that otherwise look
+    unrelated. Each of these has decided a publication in practice, and each
+    was written by hand at the time and thrown away.
+
+    The controls matter more than the positives. A detector that fires on any
+    input finds a pattern in noise, so every case below is paired with a shape
+    it must stay quiet about.
+    """
+    from core.patterns import (port_profile, registration_batches,
+                               shared_identifiers)
+
+    print("\n-- structural tests over a set --")
+
+    # 1. One recipe. Every host carrying the same number of ports is a builder
+    #    signature; a natural spread is not.
+    uniform = [("a", 4403), ("a", 5074), ("a", 41694),
+               ("b", 1065), ("b", 6675), ("b", 41667),
+               ("c", 5751), ("c", 6490), ("c", 19941)]
+    p = port_profile(uniform)
+    check(p["uniform"] and p["ports_per_host"] == 3,
+          f"three ports on every host reads as uniform -> {p['ports_per_host']}")
+    check(p["shared_ports"] == [],
+          f"and the ports themselves differ, so none is shared -> {p['shared_ports']}")
+
+    fleet = [(f"h{n}", 8094) for n in range(6)] + [(f"h{n}", 8074) for n in range(6)]
+    p = port_profile(fleet)
+    check(p["uniform"] and sorted(p["shared_ports"]) == [8074, 8094],
+          f"a fleet on two common ports shares both -> {p['shared_ports']}")
+
+    ragged = [("a", 80), ("b", 443), ("b", 8080), ("c", 22), ("c", 23), ("c", 25)]
+    check(not port_profile(ragged)["uniform"],
+          f"an uneven spread is not uniform -> {port_profile(ragged)}")
+    check(port_profile([])["uniform"] is False, "no hosts is not a uniform set")
+
+    # 2. One transaction. Registrations seconds apart are a batch; the same
+    #    names spread over weeks are not.
+    batched = [("a.example", "2026-08-13T10:49:18Z"), ("b.example", "2026-08-13T10:49:18Z"),
+               ("c.example", "2026-08-13T10:49:19Z"), ("d.example", "2026-08-19T10:30:13Z"),
+               ("e.example", "2026-08-19T10:30:13Z"), ("f.example", "2026-11-02T04:00:00Z")]
+    got = registration_batches(batched)
+    sizes = sorted(len(b["members"]) for b in got)
+    check(sizes == [2, 3], f"two batches of three and two -> {sizes}")
+    check(all(b["span_seconds"] <= 60 for b in got),
+          f"each batch is seconds wide -> {[b['span_seconds'] for b in got]}")
+    check(not any("f.example" in b["members"] for b in got),
+          "a lone registration months later joins no batch")
+
+    spread = [(f"{n}.example", f"2026-0{n}-01T00:00:00Z") for n in range(1, 7)]
+    check(registration_batches(spread) == [],
+          f"registrations a month apart are no batch -> {registration_batches(spread)}")
+    check(registration_batches([]) == [], "no registrations yields no batches")
+    check(registration_batches([("a.example", None), ("b.example", "")]) == [],
+          "undated entries yield no batch rather than a false one")
+
+    # 3. One string across unrelated hosts. This is what separated an
+    #    operator's own domains from the lure surface around them.
+    urls = ["https://one.example/curl/" + "a" * 64,
+            "https://two.example/curl/" + "a" * 64,
+            "https://three.example/curl/" + "b" * 64,
+            "https://four.example/dynamic?txd=" + "b" * 64]
+    ids = shared_identifiers(urls)
+    check(len(ids) == 2, f"two identifiers recur across hosts -> {len(ids)}")
+    top = ids[0]
+    check(top["hosts"] == 2 and len(top["seen_on"]) == 2,
+          f"each on two distinct hosts -> {top}")
+    check(any(i["identifier"] == "b" * 64 for i in ids),
+          "an identifier is found across differing path shapes")
+
+    once = ["https://one.example/curl/" + "c" * 64,
+            "https://two.example/curl/" + "d" * 64]
+    check(shared_identifiers(once) == [],
+          f"an identifier used once each is not shared -> {shared_identifiers(once)}")
+    same = ["https://one.example/curl/" + "e" * 64,
+            "https://one.example/curl/" + "e" * 64]
+    check(shared_identifiers(same) == [],
+          "the same host twice is one host, not a link")
+    check(shared_identifiers([]) == [], "no urls yields no identifiers")
+
+
 def check_score_display() -> None:
     """
     Scores reach the screen rounded, and a modifier of nothing reads as nothing.
@@ -1836,6 +1981,8 @@ def main() -> int:
     check_campaign_recency()
     check_compromised_host_disclosure()
     check_otx_coverage_states()
+    check_dense_subnets()
+    check_structural_patterns()
     check_score_display()
     check_stix_bundle_contract()
     check_urlhaus_answer_shapes()

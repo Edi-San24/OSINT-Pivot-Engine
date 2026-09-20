@@ -26,6 +26,65 @@ MAX_CLUSTER_ENTRIES = 500
 MIN_NETBLOCK_HOSTS = 4
 
 
+# Occupancy an aligned block must reach before it is reported as one, and the
+# smallest block worth reporting. Below the density the unoccupied addresses
+# outweigh the evidence; below the size a "block" is a handful of neighbours.
+SUBNET_OCCUPANCY = 0.9
+SUBNET_MIN_PREFIX = 29
+
+
+def _dense_subnets(addresses: list[str]) -> list[dict]:
+    """
+    Aligned blocks the observed addresses fill, longest prefix first.
+
+    Netblock clustering answers how many hosts share a range. This answers
+    whether they fill an allocation, which is the question that decides whether
+    a range can be published instead of its members. Density is measured
+    against usable addresses, since the network and broadcast of a block are
+    never hosts and counting them would penalise a full block for being full.
+
+    Alignment rather than contiguity: a run of addresses can straddle two
+    allocations, and only an aligned prefix is a thing an operator was given
+    and a defender can enter.
+    """
+    parsed = []
+    for value in addresses:
+        try:
+            address = ipaddress.ip_address(str(value))
+        except ValueError:
+            continue
+        if address.version == 4:
+            parsed.append(address)
+    if not parsed:
+        return []
+
+    seen = set(parsed)
+    blocks = []
+    claimed = set()
+    # Shortest prefix first, so the largest block meeting the threshold is the
+    # one reported. Taken the other way round every full block fragments, since
+    # any half of a full block is itself full.
+    for prefix in range(24, SUBNET_MIN_PREFIX + 1):
+        candidates = {ipaddress.ip_network(f"{a}/{prefix}", strict=False)
+                      for a in parsed if a not in claimed}
+        for network in candidates:
+            usable = list(network.hosts())
+            if not usable:
+                continue
+            members = [a for a in usable if a in seen]
+            if len(members) / len(usable) < SUBNET_OCCUPANCY:
+                continue
+            blocks.append({
+                "cidr": str(network),
+                "hosts": len(members),
+                "usable": len(usable),
+                "occupancy": round(len(members) / len(usable), 3),
+            })
+            claimed.update(members)
+
+    return sorted(blocks, key=lambda b: (-b["hosts"], b["cidr"]))
+
+
 def _netblocks(hosts: list[dict]) -> list[dict]:
     """
     Address concentrations within a cluster, densest first.
@@ -66,6 +125,11 @@ def _netblocks(hosts: list[dict]) -> list[dict]:
             "ports": dict(sorted(ports.items(), key=lambda kv: -kv[1])),
             "first_seen": seen[0] if seen else "unknown",
             "last_seen": seen[-1] if seen else "unknown",
+            # The aligned blocks inside this range that the hosts actually
+            # fill, which is what decides whether a range is publishable
+            # instead of its members. Empty where they are merely nearby.
+            "dense_blocks": _dense_subnets(
+                [str(a) for a in addresses if a in network]),
         })
 
     return sorted(blocks, key=lambda b: -b["hosts"])
