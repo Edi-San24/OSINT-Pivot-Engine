@@ -1513,6 +1513,83 @@ def check_dense_subnets() -> None:
           "unparseable input yields no blocks")
 
 
+def check_ct_monitor_diff() -> None:
+    """
+    A certificate monitor is only useful if silence means silence.
+
+    The failure mode that matters is not a missed name, it is a lookup that
+    did not answer being recorded as a baseline. That would mark every name it
+    never saw as already known, and the next run would report nothing new
+    while the log filled up behind it. So a failed fetch must leave the state
+    exactly as it found it.
+
+    The wildcard case is pinned because it is what the logs mostly contain.
+    Trimming the star would collapse the entry that says an operator can serve
+    any name beneath a domain without issuing anything further, which is the
+    reason those subdomains never appear here at all.
+    """
+    print("\n-- certificate monitor reports new names, and silence honestly --")
+    import json as _json
+    import tempfile
+    from scripts import ct_monitor
+
+    def cert(names, not_before):
+        return {"name_value": "\n".join(names), "not_before": f"{not_before}T00:00:00"}
+
+    assert ct_monitor._names(cert(["*.a.test", "a.test"], "2026-01-01")) == {"*.a.test", "a.test"}, \
+        "a wildcard name must survive intact"
+    assert ct_monitor._names(cert(["A.TEST"], "2026-01-01")) == {"a.test"}, "names lowercase"
+    assert ct_monitor._names({"name_value": ""}) == set(), "an empty cert yields no names"
+    print("   names parsed, wildcard preserved, case folded")
+
+    state = tempfile.NamedTemporaryFile(suffix=".json", delete=False).name
+    os.unlink(state)
+    original = ct_monitor.fetch
+    try:
+        # First run records a baseline and reports nothing, because nothing
+        # was known to compare against.
+        ct_monitor.fetch = lambda p: [cert(["*.x.test", "x.test"], "2026-02-25")]
+        ct_monitor.report(["%.x.test"], state)
+        saved = _json.load(open(state))
+        assert set(saved["%.x.test"]["names"]) == {"*.x.test", "x.test"}, saved
+        print("   first run establishes a baseline of 2")
+
+        # A second identical run must not invent a change.
+        ct_monitor.report(["%.x.test"], state)
+        assert set(_json.load(open(state))["%.x.test"]["names"]) == {"*.x.test", "x.test"}
+        print("   unchanged input reports no new names")
+
+        # A name that was not there before is the signal.
+        ct_monitor.fetch = lambda p: [cert(["*.x.test", "x.test"], "2026-02-25"),
+                                      cert(["new.x.test"], "2026-09-23")]
+        ct_monitor.report(["%.x.test"], state)
+        assert "new.x.test" in _json.load(open(state))["%.x.test"]["names"]
+        print("   a newly issued name is carried into the state")
+
+        # The one that matters. A lookup that failed has established nothing,
+        # so the baseline must be untouched rather than narrowed to what the
+        # failed call returned.
+        before = _json.load(open(state))
+        ct_monitor.fetch = lambda p: None
+        rc = ct_monitor.report(["%.x.test"], state)
+        after = _json.load(open(state))
+        assert after == before, "a failed lookup rewrote the baseline"
+        assert rc == 1, "a failed pattern must be reported in the exit code"
+        print("   a failed lookup leaves the baseline untouched and exits non-zero")
+
+        # An empty answer is a real answer and must not be confused with the above.
+        ct_monitor.fetch = lambda p: []
+        ct_monitor.report(["%.empty.test"], state)
+        assert _json.load(open(state))["%.empty.test"]["matched"] == 0
+        print("   an empty answer records zero, which is not the same as failing")
+    finally:
+        ct_monitor.fetch = original
+        if os.path.exists(state):
+            os.unlink(state)
+
+    print("   PASS: new names surface, and an unanswered lookup stays unanswered")
+
+
 def check_structural_patterns() -> None:
     """
     Three tests over a set that a per-indicator view cannot make.
@@ -2054,6 +2131,7 @@ def main() -> int:
     check_tlp_derivation()
     check_otx_coverage_states()
     check_dense_subnets()
+    check_ct_monitor_diff()
     check_structural_patterns()
     check_score_display()
     check_stix_bundle_contract()
