@@ -1265,6 +1265,77 @@ def check_campaign_recency() -> None:
           f"a domain corroborated only by an old pulse is withheld -> {why[:62]}")
 
 
+def check_tlp_derivation() -> None:
+    """
+    The sharing label follows what the published indicators actually rest on.
+
+    A licensed source taking part is not the trigger. They answer on most
+    domain pivots, so labelling on presence would mark nearly every pulse GREEN
+    and the label would carry no information. The question is narrower: is
+    there a published indicator a reader cannot check, because only a licensed
+    source has anything on it.
+
+    The failure case is separated for the usual reason. A free source that
+    errored has not established that an indicator is uncorroborated, so it is
+    reported rather than counted as licensed-only.
+    """
+    print("\n-- TLP follows what the indicators rest on --")
+    from core.stix_exporter import derive_tlp, _licensed_evidence, _free_sources_failed
+
+    def inv(results):
+        return {"indicator": "evil.test", "risk_level": "HIGH",
+                "visited": ["evil.test"],
+                "full_results": [{"indicator": "evil.test", "type": "domain",
+                                  "results": results}]}
+
+    included = [{"indicator": "evil.test", "type": "domain"}]
+
+    # Free corroboration present, licensed sources also answered and merely
+    # agreed. Nothing here is unreadable to someone without a subscription.
+    both = inv({"virustotal": {"malicious_votes": 9, "harmless_votes": 50},
+                "domaintools": {"found": True, "risk_score": 100},
+                "dnsdb": {"records": [{"domain": "x"}]}})
+    tlp, reason = derive_tlp([both], included)
+    assert tlp == "white", f"licensed agreeing with free should stay white, got {tlp}"
+    print(f"   free + licensed agreeing -> {tlp}")
+
+    # Only the licensed side has anything, so the published claim cannot be
+    # checked without the subscription.
+    lic = inv({"virustotal": {"malicious_votes": 0, "harmless_votes": 60},
+               "threatfox": {"found": False}, "urlhaus": {"found": False},
+               "domaintools": {"found": True, "risk_score": 100}})
+    tlp, reason = derive_tlp([lic], included)
+    assert tlp == "green", f"licensed-only evidence should be green, got {tlp}"
+    assert "1 of 1" in reason, reason
+    print(f"   licensed only            -> {tlp}")
+
+    # A licensed source that failed is not evidence, so it cannot drive the label.
+    errored = inv({"virustotal": {"malicious_votes": 4, "harmless_votes": 50},
+                   "domaintools": {"error": "402 payment required"}})
+    assert _licensed_evidence(errored["full_results"][0]) == [], \
+        "an errored licensed source must not count as holding evidence"
+    tlp, _ = derive_tlp([errored], included)
+    assert tlp == "white", f"errored licensed source should not force green, got {tlp}"
+    print(f"   licensed errored         -> {tlp}")
+
+    # A free source that failed leaves the backing unestablished, which is
+    # reported rather than silently read as "nothing corroborates this".
+    flaky = inv({"virustotal": {"error": "timed out"},
+                 "threatfox": {"found": False}})
+    assert _free_sources_failed(flaky["full_results"][0]) == ["virustotal"]
+    tlp, reason = derive_tlp([flaky], included)
+    assert "unestablished" in reason, reason
+    print(f"   free source failed       -> {tlp}, reason names it")
+
+    # Nothing anywhere is not a licensing question.
+    quiet = inv({"threatfox": {"found": False}, "urlhaus": {"found": False}})
+    tlp, _ = derive_tlp([quiet], included)
+    assert tlp == "white", f"no evidence at all is not a licensed dependency, got {tlp}"
+    print(f"   nothing known            -> {tlp}")
+
+    print("   PASS: the label tracks licensed dependency, not licensed presence")
+
+
 def check_compromised_host_disclosure() -> None:
     """
     A published indicator has to say whether the host behind it was taken over.
@@ -1980,6 +2051,7 @@ def main() -> int:
     check_provenance()
     check_campaign_recency()
     check_compromised_host_disclosure()
+    check_tlp_derivation()
     check_otx_coverage_states()
     check_dense_subnets()
     check_structural_patterns()

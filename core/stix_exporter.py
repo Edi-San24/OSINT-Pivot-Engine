@@ -631,6 +631,82 @@ def _corroboration(pivot: dict) -> str:
     return ""
 
 
+# Sources a reader without a subscription cannot consult. Presence of one in a
+# run means nothing on its own, since they answer on most domain pivots; what
+# matters is whether a published indicator has nothing else behind it.
+LICENSED_SOURCES = ("domaintools", "dnsdb")
+
+# The free sources _corroboration reads, listed so a failure among them can be
+# told from a clean answer of "nothing known".
+FREE_CORROBORATORS = ("threatfox", "urlhaus", "virustotal", "otx")
+
+
+def _licensed_evidence(pivot: dict) -> list[str]:
+    """
+    Licensed sources holding something on this indicator, named.
+
+    A source that errored or was skipped is not counted: it did not answer, so
+    it is neither evidence nor an absence of evidence.
+    """
+    results = pivot.get("results") or {}
+    holding = []
+    for name in LICENSED_SOURCES:
+        blob = results.get(name) or {}
+        if blob.get("error") or blob.get("skipped"):
+            continue
+        if (blob.get("found") or blob.get("records")
+                or blob.get("record_count") or blob.get("risk_score") is not None):
+            holding.append(name)
+    return holding
+
+
+def _free_sources_failed(pivot: dict) -> list[str]:
+    """Free corroborators that errored, so their silence is not an answer."""
+    results = pivot.get("results") or {}
+    return [n for n in FREE_CORROBORATORS if (results.get(n) or {}).get("error")]
+
+
+def derive_tlp(investigations: list[dict], included: list[dict]) -> tuple[str, str]:
+    """
+    The sharing label the evidence supports, with the reason it was chosen.
+
+    GREEN where a published indicator rests on a licensed source and nothing
+    free backs it, because a reader cannot check that claim. WHITE where every
+    published indicator has a free source behind it, or where the licensed
+    sources merely agreed with one.
+
+    Deliberately not "a licensed source took part". They answer on most domain
+    pivots, so that test would mark almost everything GREEN and the label would
+    stop carrying information.
+    """
+    licensed_only, failed = [], []
+    for entry in included:
+        name = entry.get("indicator", "")
+        pivot = next((p for inv in investigations
+                      if (p := pivot_for(inv, name))), {})
+        if _corroboration(pivot):
+            continue
+        if _licensed_evidence(pivot):
+            licensed_only.append(name)
+        elif _free_sources_failed(pivot):
+            failed.append(name)
+
+    note = ""
+    if failed:
+        note = (f"; {len(failed)} indicator(s) had a free source fail, so their "
+                "backing is unestablished rather than absent")
+
+    if licensed_only:
+        shown = ", ".join(sorted(licensed_only)[:3])
+        return "green", (
+            f"{len(licensed_only)} of {len(included)} published indicator(s) rest on "
+            f"licensed data with no free source behind them ({shown})" + note
+        )
+    return "white", (
+        f"all {len(included)} published indicator(s) carry free corroboration" + note
+    )
+
+
 def _engine_artifacts(investigation: dict) -> set[str]:
     """
     Names the engine invented or read off the hosting provider.
@@ -1088,7 +1164,7 @@ def _forced_reasons(include) -> dict:
 def build_pulse(investigations: list[dict], title: str, description: str,
           tags: list[str] = None, attack_ids: list[str] = None,
           exclude: list[str] = None, include: dict = None,
-          countries: list[str] = None) -> dict:
+          countries: list[str] = None, tlp: str = None) -> dict:
     """
     Assembles the pulse payload plus an audit of what was left out.
 
@@ -1099,6 +1175,10 @@ def build_pulse(investigations: list[dict], title: str, description: str,
     selector. The reason is required: the flag overrides the engine's judgement,
     so the record of who decided otherwise, and why, is the only thing left for
     a reviewer to read.
+
+    `tlp` is derived from what the published indicators rest on when left unset.
+    An explicit value wins and the derivation is still recorded, so overriding
+    it leaves a trace rather than replacing the reasoning silently.
     """
     include = _forced_reasons(include)
     included, excluded = select_indicators(investigations)
@@ -1231,12 +1311,18 @@ def build_pulse(investigations: list[dict], title: str, description: str,
             "before uploading."
         )
 
+    derived_tlp, tlp_reason = derive_tlp(investigations, included)
+    chosen_tlp = (tlp or derived_tlp).lower()
+    if tlp and chosen_tlp != derived_tlp:
+        tlp_reason = f"analyst set {chosen_tlp}, overriding {derived_tlp}: {tlp_reason}"
+        logger.warning(f"TLP set to {chosen_tlp} against a derived {derived_tlp}.")
+
     return {
         "name": title,
         "description": description,
         # A boolean. OTX rejects the integer form.
         "public": True,
-        "TLP": "white",
+        "TLP": chosen_tlp,
         "tags": tags or [],
         "attack_ids": attack_ids or [],
         "indicators": [
@@ -1253,6 +1339,9 @@ def build_pulse(investigations: list[dict], title: str, description: str,
         # stated reason rather than vanishing silently.
         "_excluded": excluded,
         "_description_leaks": leaked,
+        # Why the label is what it is. Kept out of the payload but recorded, so
+        # a reviewer can see what the choice rested on.
+        "_tlp_reason": tlp_reason,
         "_included_detail": included,
         # Forced indicators the run never assessed. Publishing one is the
         # analyst's call and is allowed, but it does not carry the standing of
@@ -1343,6 +1432,9 @@ if __name__ == "__main__":
                              "are comments. For lists too long to type.")
     parser.add_argument("--countries", default="",
                         help="Comma-separated countries the campaign targets.")
+    parser.add_argument("--tlp", default="", choices=["", "white", "green", "amber", "red"],
+                        help="Sharing label. Derived from whether the published "
+                             "indicators rest on licensed data when omitted.")
     args = parser.parse_args()
 
     description = args.description
@@ -1407,12 +1499,14 @@ if __name__ == "__main__":
             exclude=dropped_reasons,
             include=forced_reasons,
             countries=[c.strip() for c in args.countries.split(",") if c.strip()],
+            tlp=args.tlp or None,
         )
     except ValueError as exc:
         parser.error(str(exc))
     clean_path, audit_path = write_pulse(built, args.output)
 
     print(f"upload this : {clean_path}")
+    print(f"TLP         : {built['TLP']}  ({built['_tlp_reason']})")
     for i in built["_included_detail"]:
         print(f"    {i['type']:<10} {i['indicator']}  (engine: {i['engine_risk_level']})")
 
