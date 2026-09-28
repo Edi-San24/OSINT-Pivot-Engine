@@ -21,6 +21,7 @@ just the model. Licensed source blocks are stripped from it — they never feed 
 feature, and the fixture is published.
 """
 
+import contextlib
 import json
 import os
 import sys
@@ -80,6 +81,37 @@ BASELINE = {
     "93.123.39.37": 0.283,
 }
 DRIFT_TOLERANCE = 0.20
+
+# The moment the fixture and the baselines above were recorded. Domain age is
+# computed from the clock, so scoring pinned evidence against today ages the
+# fixture a day per run: a registration that was days old when pinned
+# eventually crosses a model threshold and the check fails with no code change.
+FIXTURE_PINNED = "2026-08-27T12:00:00+00:00"
+
+
+@contextlib.contextmanager
+def frozen_clock(iso: str):
+    """Every clock the scoring path reads, held at one moment."""
+    import datetime as dt
+    import types
+    import core.features as features
+    import core.temporal_scorer as temporal
+    import core.risk as risk
+
+    at = dt.datetime.fromisoformat(iso)
+
+    class Frozen(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return at if tz is None else at.astimezone(tz)
+
+    saved = (features.datetime, temporal.datetime, risk.time)
+    features.datetime = temporal.datetime = Frozen
+    risk.time = types.SimpleNamespace(time=at.timestamp)
+    try:
+        yield
+    finally:
+        features.datetime, temporal.datetime, risk.time = saved
 
 failures: list[str] = []
 notes: list[str] = []
@@ -2158,13 +2190,14 @@ def main() -> int:
 
     print("\n-- every indicator type scores without raising --")
     scores = {}
-    for indicator, entry in entries.items():
-        try:
-            result = scorer.score_any(entry)
-            scores[indicator] = result
-            check("error" not in result, f"{entry['type']:6} {indicator[:34]} scored")
-        except Exception as e:
-            check(False, f"{entry['type']:6} {indicator[:34]} raised {type(e).__name__}: {e}")
+    with frozen_clock(FIXTURE_PINNED):
+        for indicator, entry in entries.items():
+            try:
+                result = scorer.score_any(entry)
+                scores[indicator] = result
+                check("error" not in result, f"{entry['type']:6} {indicator[:34]} scored")
+            except Exception as e:
+                check(False, f"{entry['type']:6} {indicator[:34]} raised {type(e).__name__}: {e}")
 
     print("\n-- domains use the domain model, not the IP model --")
     for indicator, entry in entries.items():
