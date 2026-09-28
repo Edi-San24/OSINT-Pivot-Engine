@@ -1312,7 +1312,8 @@ def check_tlp_derivation() -> None:
     reported rather than counted as licensed-only.
     """
     print("\n-- TLP follows what the indicators rest on --")
-    from core.stix_exporter import derive_tlp, _licensed_evidence, _free_sources_failed
+    from core.stix_exporter import (derive_tlp, pivot_for, _licensed_evidence,
+                                    _free_sources_failed)
 
     def inv(results):
         return {"indicator": "evil.test", "risk_level": "HIGH",
@@ -1361,9 +1362,23 @@ def check_tlp_derivation() -> None:
 
     # Nothing anywhere is not a licensing question.
     quiet = inv({"threatfox": {"found": False}, "urlhaus": {"found": False}})
-    tlp, _ = derive_tlp([quiet], included)
+    tlp, reason = derive_tlp([quiet], included)
     assert tlp == "white", f"no evidence at all is not a licensed dependency, got {tlp}"
-    print(f"   nothing known            -> {tlp}")
+    assert "0 of 1" in reason and "no evidence" in reason, \
+        f"an indicator nothing knows about was described as corroborated: {reason}"
+    print(f"   nothing known            -> {tlp}, and the reason says so")
+
+    # A URL keeps the case of its path, so lookups fold case on both sides.
+    # Otherwise a licensed-only URL reads as unevidenced and comes out WHITE.
+    url = "https://cdn.test/Payload.EXE"
+    mixed = {"indicator": url, "risk_level": "HIGH",
+             "full_results": [{"indicator": url, "type": "url",
+                               "results": {"domaintools": {"found": True, "risk_score": 100}}}]}
+    assert pivot_for(mixed, url), "an exact-case lookup missed"
+    assert pivot_for(mixed, url.upper()), "a case-folded lookup missed"
+    tlp, _ = derive_tlp([mixed], [{"indicator": url, "type": "URL"}])
+    assert tlp == "green", f"a licensed-only mixed-case URL must be green, got {tlp}"
+    print(f"   mixed-case licensed URL  -> {tlp}")
 
     print("   PASS: the label tracks licensed dependency, not licensed presence")
 

@@ -390,10 +390,16 @@ def _is_known_malicious(domain: str) -> bool:
 
 
 def pivot_for(investigation: dict, name: str) -> dict:
-    """The pivot result for one indicator, or an empty dict."""
+    """
+    The pivot result for one indicator, or an empty dict.
+
+    Case-insensitive on both sides. A URL keeps the case of its path, and a
+    miss here reads downstream as an indicator no source had anything on.
+    """
+    wanted = (name or "").lower()
     return next(
         (p for p in investigation.get("full_results", [])
-         if (p.get("indicator") or "").lower() == name),
+         if (p.get("indicator") or "").lower() == wanted),
         {},
     )
 
@@ -671,15 +677,18 @@ def derive_tlp(investigations: list[dict], included: list[dict]) -> tuple[str, s
     The sharing label the evidence supports, with the reason it was chosen.
 
     GREEN where a published indicator rests on a licensed source and nothing
-    free backs it, because a reader cannot check that claim. WHITE where every
-    published indicator has a free source behind it, or where the licensed
-    sources merely agreed with one.
+    free backs it, because a reader cannot check that claim. WHITE otherwise,
+    since nothing published then depends on a subscription.
 
     Deliberately not "a licensed source took part". They answer on most domain
     pivots, so that test would mark almost everything GREEN and the label would
     stop carrying information.
+
+    The reason counts each case separately. An indicator no source has anything
+    on is reported as such, not folded into the corroborated ones, so the audit
+    never claims backing the evidence does not show.
     """
-    licensed_only, failed = [], []
+    licensed_only, failed, bare = [], [], []
     for entry in included:
         name = entry.get("indicator", "")
         pivot = next((p for inv in investigations
@@ -690,20 +699,27 @@ def derive_tlp(investigations: list[dict], included: list[dict]) -> tuple[str, s
             licensed_only.append(name)
         elif _free_sources_failed(pivot):
             failed.append(name)
+        else:
+            bare.append(name)
 
-    note = ""
+    backed = len(included) - len(licensed_only) - len(failed) - len(bare)
+    notes = []
     if failed:
-        note = (f"; {len(failed)} indicator(s) had a free source fail, so their "
-                "backing is unestablished rather than absent")
+        notes.append(f"{len(failed)} had a free source fail, so their backing is "
+                     "unestablished rather than absent")
+    if bare:
+        notes.append(f"{len(bare)} carry no evidence from any source")
+    tail = "".join(f"; {n}" for n in notes)
 
     if licensed_only:
         shown = ", ".join(sorted(licensed_only)[:3])
         return "green", (
             f"{len(licensed_only)} of {len(included)} published indicator(s) rest on "
-            f"licensed data with no free source behind them ({shown})" + note
+            f"licensed data with no free source behind them ({shown}){tail}"
         )
     return "white", (
-        f"all {len(included)} published indicator(s) carry free corroboration" + note
+        f"{backed} of {len(included)} published indicator(s) carry free "
+        f"corroboration{tail}"
     )
 
 
