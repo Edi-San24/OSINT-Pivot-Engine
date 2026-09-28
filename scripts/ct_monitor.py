@@ -71,8 +71,9 @@ def fetch(pattern: str) -> list[dict] | None:
         print(f"  lookup failed: {type(exc).__name__} {str(exc)[:80]}")
         return None
 
-    if response.status_code == 404:
-        return []
+    # A 404 is not the no-results signal: crt.sh returns it for wildcard queries
+    # that do have matches. A genuine empty result arrives as a 200 carrying an
+    # empty list, so only that is read as nothing issued.
     if response.status_code != 200:
         print(f"  lookup failed: HTTP {response.status_code}")
         return None
@@ -121,20 +122,35 @@ def report(patterns: list[str], state_path: str, since: str = "") -> int:
                 if name not in first_seen or not_before < first_seen[name]:
                     first_seen[name] = not_before
 
-        if since:
-            first_seen = {n: d for n, d in first_seen.items() if d >= since}
-
+        # Whether the pattern has run before, not whether it matched. A pattern
+        # watched because nothing matches it yet has an empty baseline, and its
+        # first match is the event this exists to report.
+        has_baseline = pattern in state
         known = set(state.get(pattern, {}).get("names") or [])
-        fresh = sorted(set(first_seen) - known)
+        fresh = set(first_seen) - known
 
-        if not known:
-            print(f"  baseline established: {len(first_seen)} name(s) recorded")
-            print("  nothing reported as new, because nothing was known before")
-        elif fresh:
-            new_total += len(fresh)
-            print(f"  {len(fresh)} new name(s) since the last run:")
-            for name in sorted(fresh, key=lambda n: (first_seen[n], n), reverse=True):
+        # --since narrows what is shown, never what is recorded. Recording only
+        # recent names would report the older ones as new on a later run.
+        shown = sorted((n for n in fresh if not since or first_seen[n] >= since),
+                       key=lambda n: (first_seen[n], n), reverse=True)
+
+        if not has_baseline:
+            if first_seen:
+                print(f"  baseline established: {len(first_seen)} name(s) recorded")
+                print("  nothing reported as new, because nothing was known before")
+            else:
+                print("  baseline established: nothing matches yet, so the first "
+                      "name that does will be reported as new")
+        elif shown:
+            new_total += len(shown)
+            print(f"  {len(shown)} new name(s) since the last run:")
+            for name in shown:
                 print(f"     {first_seen[name]}  {name}")
+            if len(fresh) > len(shown):
+                print(f"  {len(fresh) - len(shown)} more issued before {since}, "
+                      "recorded but not shown")
+        elif fresh:
+            print(f"  {len(fresh)} new name(s) issued before {since}, recorded but not shown")
         else:
             print(f"  no new names, {len(first_seen)} still matching")
 
@@ -166,8 +182,9 @@ def main() -> int:
     parser.add_argument("--state", default=DEFAULT_STATE,
                         help=f"where the seen-names baseline lives (default {DEFAULT_STATE})")
     parser.add_argument("--since", default="",
-                        help="only names whose certificate was issued on or after "
-                             "this date, YYYY-MM-DD")
+                        help="show only new names whose certificate was issued on "
+                             "or after this date, YYYY-MM-DD. Every name is still "
+                             "recorded")
     args = parser.parse_args()
     return report(args.patterns, args.state, args.since)
 

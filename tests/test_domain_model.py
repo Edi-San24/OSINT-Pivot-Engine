@@ -1568,7 +1568,12 @@ def check_ct_monitor_diff() -> None:
     did not answer being recorded as a baseline. That would mark every name it
     never saw as already known, and the next run would report nothing new
     while the log filled up behind it. So a failed fetch must leave the state
-    exactly as it found it.
+    exactly as it found it, and a crt.sh 404, which it returns for wildcard
+    queries that do have matches, must count as a failure, not an empty answer.
+
+    The empty baseline is the case the monitor exists for: a pattern watched
+    because nothing matches it yet. Its first match has to surface as new
+    rather than be absorbed as a second baseline.
 
     The wildcard case is pinned because it is what the logs mostly contain.
     Trimming the star would collapse the entry that says an operator can serve
@@ -1589,50 +1594,99 @@ def check_ct_monitor_diff() -> None:
     assert ct_monitor._names({"name_value": ""}) == set(), "an empty cert yields no names"
     print("   names parsed, wildcard preserved, case folded")
 
-    state = tempfile.NamedTemporaryFile(suffix=".json", delete=False).name
-    os.unlink(state)
-    original = ct_monitor.fetch
+    import io
+
+    def run(pattern, state, answer, since=""):
+        """One monitor run against a canned answer, returning what it printed."""
+        ct_monitor.fetch = lambda p: answer
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = ct_monitor.report([pattern], state, since)
+        return rc, out.getvalue()
+
+    def new_state():
+        path = tempfile.NamedTemporaryFile(suffix=".json", delete=False).name
+        os.unlink(path)
+        return path
+
+    original_fetch, original_get = ct_monitor.fetch, ct_monitor.get_with_retry
+    paths = []
     try:
         # First run records a baseline and reports nothing, because nothing
         # was known to compare against.
-        ct_monitor.fetch = lambda p: [cert(["*.x.test", "x.test"], "2026-02-25")]
-        ct_monitor.report(["%.x.test"], state)
+        state = new_state(); paths.append(state)
+        base = [cert(["*.x.test", "x.test"], "2026-02-25")]
+        _, out = run("%.x.test", state, base)
         saved = _json.load(open(state))
         assert set(saved["%.x.test"]["names"]) == {"*.x.test", "x.test"}, saved
+        assert "baseline established" in out, out
         print("   first run establishes a baseline of 2")
 
         # A second identical run must not invent a change.
-        ct_monitor.report(["%.x.test"], state)
-        assert set(_json.load(open(state))["%.x.test"]["names"]) == {"*.x.test", "x.test"}
+        _, out = run("%.x.test", state, base)
+        assert "no new names" in out, out
         print("   unchanged input reports no new names")
 
         # A name that was not there before is the signal.
-        ct_monitor.fetch = lambda p: [cert(["*.x.test", "x.test"], "2026-02-25"),
-                                      cert(["new.x.test"], "2026-09-23")]
-        ct_monitor.report(["%.x.test"], state)
+        _, out = run("%.x.test", state, base + [cert(["new.x.test"], "2026-09-23")])
+        assert "1 new name(s)" in out and "new.x.test" in out, out
         assert "new.x.test" in _json.load(open(state))["%.x.test"]["names"]
-        print("   a newly issued name is carried into the state")
+        print("   a newly issued name is reported and carried into the state")
 
-        # The one that matters. A lookup that failed has established nothing,
-        # so the baseline must be untouched rather than narrowed to what the
-        # failed call returned.
+        # A lookup that failed has established nothing, so the baseline must be
+        # untouched rather than narrowed to what the failed call returned.
         before = _json.load(open(state))
-        ct_monitor.fetch = lambda p: None
-        rc = ct_monitor.report(["%.x.test"], state)
-        after = _json.load(open(state))
-        assert after == before, "a failed lookup rewrote the baseline"
+        rc, _ = run("%.x.test", state, None)
+        assert _json.load(open(state)) == before, "a failed lookup rewrote the baseline"
         assert rc == 1, "a failed pattern must be reported in the exit code"
         print("   a failed lookup leaves the baseline untouched and exits non-zero")
 
-        # An empty answer is a real answer and must not be confused with the above.
-        ct_monitor.fetch = lambda p: []
-        ct_monitor.report(["%.empty.test"], state)
-        assert _json.load(open(state))["%.empty.test"]["matched"] == 0
-        print("   an empty answer records zero, which is not the same as failing")
+        # The case the monitor exists for: nothing matches yet, then something does.
+        _, out = run("%watch.test", state, [])
+        assert "nothing matches yet" in out, out
+        assert _json.load(open(state))["%watch.test"]["matched"] == 0
+        _, out = run("%watch.test", state, [cert(["first-watch.test"], "2026-09-24")])
+        assert "1 new name(s)" in out and "first-watch.test" in out, \
+            f"the first match on an empty baseline was absorbed, not reported:\n{out}"
+        print("   a watched pattern's first match is reported as new, not absorbed")
+
+        # --since narrows the report, never the record.
+        dated = new_state(); paths.append(dated)
+        mix = [cert(["old.y.test"], "2025-01-01"), cert(["recent.y.test"], "2026-09-20")]
+        run("%.y.test", dated, [])
+        _, out = run("%.y.test", dated, mix, since="2026-09-01")
+        assert "recent.y.test" in out and "old.y.test" not in out, out
+        assert "1 more issued before 2026-09-01" in out, out
+        _, out = run("%.y.test", dated, mix)
+        assert "no new names" in out, f"--since kept an older name out of the record:\n{out}"
+        print("   --since filters what is shown and still records every name")
+
+        # What fetch makes of each answer crt.sh can give.
+        class Response:
+            def __init__(self, status, body):
+                self.status_code, self._body = status, body
+
+            def json(self):
+                if isinstance(self._body, Exception):
+                    raise self._body
+                return self._body
+
+        ct_monitor.fetch = original_fetch
+        for status, body, want, label in [
+                (404, [], None, "a 404"),
+                (502, None, None, "a 502"),
+                (200, ValueError("html error page"), None, "a 200 that is not JSON"),
+                (200, [], [], "an empty 200")]:
+            ct_monitor.get_with_retry = lambda *a, _s=status, _b=body, **k: Response(_s, _b)
+            with contextlib.redirect_stdout(io.StringIO()):
+                got = ct_monitor.fetch("%.z.test")
+            assert got == want, f"{label} should read as {want!r}, got {got!r}"
+        print("   a 404 counts as a failure, and only an empty 200 as nothing issued")
     finally:
-        ct_monitor.fetch = original
-        if os.path.exists(state):
-            os.unlink(state)
+        ct_monitor.fetch, ct_monitor.get_with_retry = original_fetch, original_get
+        for path in paths:
+            if os.path.exists(path):
+                os.unlink(path)
 
     print("   PASS: new names surface, and an unanswered lookup stays unanswered")
 
