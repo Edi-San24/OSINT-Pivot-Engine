@@ -44,6 +44,14 @@ connectors/domaintools.py
 connectors/dnsdb.py
 core/tier.py
 
+# The second domain model, trained on licensed facts. The free v2c model stays
+# the published one so a clone can retrain from the published CSV and reproduce
+# its predictions; this one cannot be reproduced without a subscription.
+# core/scorer.py imports it behind a guard, so its absence changes nothing.
+core/licensed_model.py
+scripts/train_licensed_local.py
+roc_*.png
+
 # Models stay local even now that the domain one is good. A .joblib is a pickle,
 # so joblib.load() on a file from a pull request is arbitrary code execution, and
 # a subtly retrained model is invisible to review in a way a CSV row is not.
