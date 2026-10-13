@@ -17,6 +17,8 @@ Built for people without a commercial threat intel platform: solo analysts, smal
 
 **It helps you triage, not attribute.** It will tell you an indicator looks dangerous and where to look next. It will not tell you which group is behind it, and you should not use it as though it does.
 
+Four of the investigations it produced are written up in [docs/INVESTIGATIONS.md](docs/INVESTIGATIONS.md), including what each one withheld and where a prediction failed.
+
 ---
 
 ## What It Does
