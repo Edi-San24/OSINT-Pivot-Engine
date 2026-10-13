@@ -1560,6 +1560,67 @@ def check_dense_subnets() -> None:
           "unparseable input yields no blocks")
 
 
+def check_spf_parsing() -> None:
+    """
+    An SPF record names addresses its own operator authorises, which is the one
+    place infrastructure is published by the party running it rather than
+    reported by someone watching. The terms are not interchangeable, so the
+    parse has to keep them apart.
+
+    A bare address is a host and can be pivoted. A CIDR is not a host, and
+    chaining it would spend a pivot on something that cannot be investigated.
+    An `include:` names another domain's record, which for most senders is a
+    mail provider shared with thousands of unrelated domains, so treating it
+    as an indicator would publish the provider.
+
+    The quoting is pinned because the wire format is what a resolver hands
+    back. A record arrives wrapped in quotes, and one over 255 bytes arrives
+    split into several quoted strings. A parser that matched on the raw string
+    would find no SPF on a domain that has one and report absence, which is
+    the failure this file exists to keep catching.
+    """
+    print("\n-- SPF records are read, and their terms kept apart --")
+    from connectors.dns import parse_spf
+
+    seen = parse_spf(["v=spf1 a mx ip4:31.24.16.1 ip4:31.24.16.5 ip4:31.24.16.7 -all"])
+    check(seen["ipv4"] == ["31.24.16.1", "31.24.16.5", "31.24.16.7"],
+          f"every authorised address is recovered -> {seen['ipv4']}")
+
+    quoted = parse_spf(['"v=spf1 ip4:31.24.16.1 -all"'])
+    check(quoted.get("present") and quoted["ipv4"] == ["31.24.16.1"],
+          "a record still in its wire quoting parses rather than reading as absent")
+
+    split = parse_spf(['"v=spf1 ip4:5.5.5.5 " "ip4:6.6.6.6 -all"'])
+    check(split["ipv4"] == ["5.5.5.5", "6.6.6.6"],
+          "a record split across several strings is rejoined before parsing")
+
+    mixed = parse_spf(["v=spf1 ip4:10.0.0.0/8 ip4:1.2.3.4 ip6:2001:db8::1 "
+                      "include:_spf.google.com redirect=x.com ~all"])
+    check(mixed["ipv4"] == ["1.2.3.4"], "a range is not offered as a host")
+    check(mixed["ipv4_ranges"] == ["10.0.0.0/8"], "the range is still recorded")
+    check(mixed["provider_references"] == ["_spf.google.com", "x.com"],
+          "include and redirect are recorded as providers, not as indicators")
+
+    check(parse_spf([]).get("present") is False,
+          "no TXT at all reports absence")
+    check(parse_spf(["google-site-verification=abc"]).get("present") is False,
+          "TXT without an SPF record is not mistaken for one")
+    check(parse_spf(["V=SPF1 IP4:9.9.9.9 -ALL"])["ipv4"] == ["9.9.9.9"],
+          "the record is read whatever its case")
+
+    # The chain must offer the authorised addresses and nothing else from here.
+    from core.agent import extract_new_indicators
+    pivot = {
+        "indicator": "example.test",
+        "type": "domain",
+        "results": {"dns": {"a": ["203.0.113.9"], "spf": mixed}},
+    }
+    chained = extract_new_indicators(pivot, visited=set())
+    check("1.2.3.4" in chained, "an authorised address reaches the chain")
+    check("10.0.0.0/8" not in chained, "a range is never chained")
+    check("_spf.google.com" not in chained, "a provider reference is never chained")
+
+
 def check_ct_monitor_diff() -> None:
     """
     A certificate monitor is only useful if silence means silence.
@@ -2233,6 +2294,7 @@ def main() -> int:
     check_otx_coverage_states()
     check_dense_subnets()
     check_ct_monitor_diff()
+    check_spf_parsing()
     check_structural_patterns()
     check_score_display()
     check_stix_bundle_contract()

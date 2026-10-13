@@ -216,6 +216,16 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             if is_ipv4(ip) and ip not in visited:
                 new_indicators.append(ip)
 
+        # Addresses the domain's own SPF record authorises. Published by the
+        # operator and reported as infrastructure by nothing else, so a host
+        # named here can be one the A record never points at. Ranges and
+        # provider references are deliberately not chained: a CIDR is not a
+        # host, and an include names a shared mail provider.
+        spf = (results.get("dns", {}) or {}).get("spf") or {}
+        for ip in spf.get("ipv4") or []:
+            if is_ipv4(ip) and ip not in visited:
+                new_indicators.append(ip)
+
         # crt.sh moved to its own key; older saved investigations still have
         # it under "censys".
         certs = results.get("crtsh") or results.get("censys") or {}
