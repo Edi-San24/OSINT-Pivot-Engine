@@ -8,29 +8,36 @@ Some featured investigations conducted by the Pivot Engine
 
 [Pulse](https://otx.alienvault.com/pulse/6aaa81ca5b399ed79277b44b) · 16 September 2026 · 8 CIDR blocks
 
-A fleet of VShell command and control hosts sitting in contiguous runs at one
-provider. Published as eight /27 blocks rather than as 232 individual
-addresses, because a /27 expands to its hosts losslessly and publishing both
-would have added 232 derivable rows while leaving the claim ambiguous. A block
-was published only where at least 29 of its 30 usable addresses were already
-listed.
+**Target.** A VShell command and control fleet at a single provider, reached by
+querying the family rather than any one address, so the unit of analysis was
+the cluster from the start.
 
-The enclosing /21 was withheld. 1816 of its 2048 addresses carry no evidence at
-all, and the controls established uniform ownership, not that the rest of the
-range is in use or hostile.
+**What came out of it.** 232 listed addresses sitting in contiguous runs. Eight
+/27 blocks were dense enough to publish as blocks: in each, at least 29 of the
+30 usable addresses were already listed as C2. Publishing the blocks rather
+than the hosts says something the host list cannot, which is that the operator
+holds whole allocations rather than scattered machines.
 
-Every address came from a single ThreatFox reporter, so one reporter is one
-opinion, and VirusTotal was used as the second source. The strength is not the
-depth of any one detection, which ran 3 to 8 of roughly 55, but that 87 of 87
-newly checked addresses showed detections with no exceptions.
+**Insights.** Every address traced to one ThreatFox reporter, and one reporter
+is one opinion however many rows it produces, so VirusTotal became the second
+source. The strength there is not depth, since individual detections ran 3 to 8
+of roughly 55, but consistency: 87 of 87 newly checked addresses carried
+detections with no exceptions. A control group of eight unlisted addresses in
+the same range resolved to the same owner and carried no detections, which is
+what separates a dense block from a provider that simply looks bad.
 
-**What was wrong.** The pulse carried a prediction of its own: that the block
-offset would recur in adjacent /24s. Testing it gave 18 matches against 27.3
-expected by chance, which is below chance. Five of nine multi-address /24s were
-perfectly contiguous but at other offsets, so the operator takes blocks while
-the position belongs to the allocation. The hunt rule in the description had
-been drafted telling defenders to watch an offset that does not recur, and was
+The pulse also carried a prediction: that the block offset would recur in
+adjacent /24s. It did not. Testing gave 18 matches against 27.3 expected by
+chance, below chance, and five of nine multi-address /24s were perfectly
+contiguous at other offsets. The operator takes blocks; the position belongs to
+the allocation. The hunt rule had been drafted around that offset and was
 rewritten before publication.
+
+**Withheld.** The enclosing /21, because 1816 of its 2048 addresses carry no
+evidence and the controls established common ownership rather than hostility.
+The 232 individual addresses were also left out, since a /27 expands to its
+hosts losslessly and publishing both would have added derivable rows while
+making the claim ambiguous.
 
 ---
 
@@ -38,27 +45,35 @@ rewritten before publication.
 
 [Pulse](https://otx.alienvault.com/pulse/6aab5ace3c70403848af5abc) · 17 September 2026 · 7 indicators
 
-Two tiers kept apart: command and control on three cloud instances, each
-listening on exactly three high ports, and payload delivery on separately
-rented VPS hosts reached by their provider-assigned hostnames.
+**Target.** Grandoreiro infrastructure that a feed tagged as targeting Mexico.
 
-The family is Brazilian in origin and the feed tags this activity as targeting
-Mexico. The description says so explicitly, because the tag describes who is
-being hit and not where the operator sits, and conflating the two is how a
-pulse ends up asserting attribution it has not earned.
+**What came out of it.** Two tiers that do not look alike. Command and control
+ran on three cloud instances, each listening on exactly three high ports.
+Payload delivery ran separately on rented VPS hosts reached by their
+provider-assigned hostnames. A dynamic DNS name tied the tiers together: it
+resolved to two of the three C2 hosts inside a single week.
 
-A dynamic DNS name ties the tiers together, having resolved to two of the three
-C2 hosts inside one week. The feed classifies it only as unknown malware, so
-the pulse states that the link rests on shared hosting and timing rather than
-on anyone's label.
+**Insights.** The family is Brazilian in origin and the targeting is Mexican,
+and the pulse says both, because a targeting tag describes who is being hit and
+not where the operator sits. Collapsing those two is how a pulse ends up
+claiming attribution it has not earned.
 
-**What was left out.** Two candidates. One had no evidence newer than 146 days,
-outside the currency window, so it described a host the campaign had already
-left. The other was a live host behind a delivery name, but only one weak
-source carried it, below the two-source bar applied to everything else in the
-set. Passive DNS on all three C2 addresses showed no third-party tenant, so
-nothing published here lands on a bystander. Cloud addresses recycle, so that
-holds now rather than indefinitely.
+The dynamic DNS link is stated as what it is. The feed classifies that name
+only as unknown malware, so the connection rests on shared hosting and timing,
+not on anyone's label, and a reader can weigh it accordingly.
+
+Two of the three delivery hosts stopped resolving within forty days of being
+reported. They stay in the pulse anyway: blocking them achieves nothing now,
+but they remain worth searching for in historical logs. Because the provider
+issues those hostnames per instance and retires them with the VPS, a dead one
+cannot later be handed to an unrelated customer.
+
+**Withheld.** Two candidates. One had no evidence newer than 146 days, which
+describes a host the campaign had already left. The other was live behind a
+delivery name but carried only one weak source, below the two-source bar
+applied to everything else in the set. Passive DNS on all three C2 addresses
+showed no third-party tenant, so nothing published lands on a bystander, and
+that holds now rather than indefinitely because cloud addresses recycle.
 
 ---
 
@@ -66,21 +81,31 @@ holds now rather than indefinitely.
 
 [Pulse](https://otx.alienvault.com/pulse/6a9c931eaaa920f1301b969a) · 5 September 2026 · 5 hashes
 
-Detection content rather than a blocklist, and the pulse says so. No command
-and control address is published because none was found, and the samples were
-not detonated. Blocking five hashes buys little when the delivery chain
-rebuilds, so the value is the ATT&CK mapping and the behaviour to watch for:
-mail-delivered attachments running through HTA or Visual Basic, injection into
-browser processes, then reads of browser credential stores.
+**Target.** Mispadu, the banking trojan built and operated by Malteiro, seeded
+by nothing more than the group name.
+
+**What came out of it.** Five samples and an ATT&CK mapping to the techniques
+MITRE attributes to G1026. This is the one investigation here where the engine
+did the whole expansion unaided: one seed, six pivots, and every published
+indicator reached and scored by the chain rather than added by an analyst.
+
+**Insights.** The deliverable is detection content, not a blocklist, and the
+difference matters. Five hashes buy little when the delivery chain rebuilds, so
+the pulse describes the chain instead: mail-delivered attachments running
+through HTA or Visual Basic, injection into browser processes, then reads of
+browser credential stores. Mispadu checks system language before running, which
+is the single clearest behaviour to detect on, and lures are Spanish and
+Portuguese.
 
 Mispadu is sold as a service. A sample therefore places the family and its
 platform, not necessarily the operators who built it, and the campaign behind
-any given sample may be a customer's. The pulse records that caveat rather
-than naming the group as the operator of everything the family touches.
+any given sample may belong to a customer. The pulse carries that caveat rather
+than naming the group as the author of everything the family touches.
 
-This is the one entry where the engine did the whole expansion unaided: one
-seed, the group name, and every published indicator was reached and scored by
-the chain rather than added by hand.
+**Withheld.** Nothing, and the distinction is worth drawing. No command and
+control address appears because none was found, not because one was held back,
+and the samples were not detonated. An absence reported as a decision would
+claim more care than was taken.
 
 ---
 
@@ -89,27 +114,35 @@ the chain rather than added by hand.
 [First pulse](https://otx.alienvault.com/pulse/6ac7e464e441c5b8f83f0700) · 8 October 2026 · 18 indicators
 [Follow-up](https://otx.alienvault.com/pulse/6acd68a608b12071ccd4e2b8) · 12 October 2026 · 7 indicators
 
-A cluster of lookalike domains impersonating German public tendering and
-vehicle-fleet procurement, including one imitating the federal armed forces
-equipment office. Three URLs reported to a feed became ten domains across two
-hosts, linked by one TLS certificate covering three of the names and by the
-same lure path on eight of them.
+**Target.** Three URLs reported to a feed in one morning, all German domains
+serving the same path.
 
-**What was left out.** The second host was shared with unrelated infrastructure
-and was withheld. So were three parent domains belonging to real companies
-whose DNS had been used against them: the published indicators are the
-subdomains an attacker added to those zones, not the companies' own names, and
-the description says to block the hostname and leave the parent alone.
+**What came out of it.** Ten domains across two hosts, including lookalikes for
+federal e-tendering, a procurement portal, and the armed forces equipment
+office. One TLS certificate covered three of the names outright. Eight served
+an identical lure path. Four days later the operator stood up a replacement on
+the same host, serving that path and a second one, and within a day of the
+follow-up the new name moved twice more, to hosting in two other countries,
+taking a newly compromised company's subdomain with it.
 
-The export tooling also proposed two certificates that belonged to the victim
-companies, one of them a wildcard covering an entire firm's domain. Publishing
-that would have flagged all of their legitimate traffic. Both were removed by
-hand before upload.
+**Insights.** Every campaign domain resolved through one provider's
+nameservers and mail, which is what separated them from the unrelated tenants
+renting the same box. Registration history then separated the attacker's own
+lookalikes from real companies whose DNS had been turned against them: the
+operator was compromising hosting-provider accounts and repointing records,
+not typosquatting, and the follow-up found the same pattern at a second German
+provider.
 
-**What was wrong.** The first pulse told defenders to hunt one lure path. Four
-days later the operator stood up a replacement domain on the same host serving
-that path and a second one, so the original rule caught half its URLs. The
-follow-up says so. It also recorded a prediction that the operator would stay
-on that provider, which held for about a day before the name moved twice more,
-to hosting in two other countries. That correction is in the published pulse
-rather than left standing.
+The first pulse told defenders to hunt one lure path. When the replacement
+served two, that rule caught half its URLs, and the follow-up says so. It also
+recorded a prediction that the operator would stay on one provider. That held
+for about a day. Both corrections sit in the published pulses rather than
+being left to stand.
+
+**Withheld.** The second host, shared with unrelated infrastructure. Three
+parent domains belonging to real companies, where the published indicators are
+the subdomains an attacker added to their zones and the description says to
+block the hostname and leave the parent alone. And two certificates the export
+tooling proposed that belonged to the victims rather than the operator, one of
+them a wildcard covering an entire firm's domain, which would have flagged all
+of that company's legitimate traffic.
