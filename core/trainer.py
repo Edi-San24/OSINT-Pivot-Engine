@@ -10,8 +10,10 @@ import pandas as pd
 import mlflow
 import mlflow.sklearn
 from sklearn.ensemble import IsolationForest, GradientBoostingClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, roc_auc_score
+from sklearn.pipeline import Pipeline
 from core.features import build_feature_matrix, FEATURE_COLUMNS
 from config import MODEL_DIR, DATA_DIR
 
@@ -119,17 +121,29 @@ def train_models(
     with mlflow.start_run(run_name=f"gradient_boosting{suffix}"):
         print("[*] Training Gradient Boosting...")
 
-        gb_model = GradientBoostingClassifier(
-            n_estimators=100,
-            learning_rate=0.1,
-            max_depth=3,
-            random_state=42
-        )
+        # A tree splits on order, so an out-of-range sentinel for "no value" is
+        # read as an extreme rather than as missing: an unknown registration
+        # date lands below every real age and scores as newly registered. The
+        # imputer replaces it with the median age and leaves domain_age_known
+        # to carry the fact that it was absent. Measured over 8 resampled
+        # 5-fold splits, this holds AUC and stops a decades-old domain on a
+        # registry that publishes no dates reading as fresh infrastructure.
+        # Every other feature is a non-negative count or flag, so -1 is unique
+        # to the age column.
+        gb_model = Pipeline([
+            ("impute_absent", SimpleImputer(missing_values=-1, strategy="median")),
+            ("gb", GradientBoostingClassifier(
+                n_estimators=100,
+                learning_rate=0.1,
+                max_depth=3,
+                random_state=42
+            )),
+        ])
 
         # Compute class weights to compensate for imbalanced dataset
         from sklearn.utils.class_weight import compute_sample_weight
         sample_weights = compute_sample_weight(class_weight="balanced", y=y_train)
-        gb_model.fit(X_train, y_train, sample_weight=sample_weights)
+        gb_model.fit(X_train, y_train, gb__sample_weight=sample_weights)
 
         y_pred = gb_model.predict(X_test)
         y_prob = gb_model.predict_proba(X_test)[:, 1]
@@ -139,9 +153,15 @@ def train_models(
         mlflow.log_param("learning_rate", 0.1)
         mlflow.log_param("max_depth", 3)
         mlflow.log_metric("roc_auc", roc_auc)
-        mlflow.sklearn.log_model(gb_model, name=f"gradient_boosting{suffix}")
-
+        # Written before logging, so a failure in the tracking layer cannot
+        # lose a trained model. The imputer carries a numpy dtype that skops
+        # does not trust by default, which is a serialisation rule rather than
+        # anything about the model.
         joblib.dump(gb_model, f"{MODEL_DIR}/gradient_boosting{suffix}.joblib")
+        mlflow.sklearn.log_model(
+            gb_model, name=f"gradient_boosting{suffix}",
+            skops_trusted_types=["numpy.dtype"],
+        )
         print(f"[+] Gradient Boosting trained. ROC-AUC: {roc_auc:.4f}")
         print(classification_report(y_test, y_pred))
 
@@ -149,7 +169,7 @@ def train_models(
         # 1.0000 next to one feature at 0.90 importance is a leak, not a result.
         print("[*] Feature importances:")
         ranked = sorted(
-            zip(trained_columns, gb_model.feature_importances_),
+            zip(trained_columns, gb_model.named_steps["gb"].feature_importances_),
             key=lambda pair: pair[1], reverse=True,
         )
         for name, importance in ranked:

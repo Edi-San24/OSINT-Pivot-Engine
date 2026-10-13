@@ -7,7 +7,7 @@ import joblib
 import numpy as np
 import logging
 from core import hacktivist
-from core.features import extract_features
+from core.features import extract_features, AGE_UNKNOWN
 # Single source for the level mapping. scorer used to carry its own copy of
 # both the (0.7, 0.4) default and the comparison, so changing one left the
 # other silently disagreeing — the front end and the scorer already diverged
@@ -117,15 +117,21 @@ class ConfidenceScorer:
         import pandas as pd
         row = pd.DataFrame([features])
 
-        # A feature vector of all zeros means no source answered, not that the
-        # indicator looks suspicious. The two are indistinguishable to the
-        # model, which resolves them as suspicious: a domain with no
-        # registration date, no nameservers and no MX has the same vector as one
-        # registered today. domain_age_known cannot carry the distinction on its
-        # own, since the model gives it almost no weight, so the guard belongs
-        # here rather than in a feature.
+        # A feature vector carrying nothing means no source answered, not that
+        # the indicator looks suspicious, and the model resolves the two the
+        # same way. The guard stays here rather than in a feature because
+        # domain_age_known is given almost no weight by the model and cannot
+        # carry the distinction alone.
+        #
+        # The unknown-age sentinel counts as nothing, not as a value. Reading
+        # it as a value would keep this from firing on exactly the vector it
+        # exists to catch.
+        def carries_data(column: str) -> bool:
+            value = float(features.get(column, 0) or 0)
+            return bool(value) and value != AGE_UNKNOWN
+
         trained = list(gb.feature_names_in_)
-        if not any(float(features.get(column, 0) or 0) for column in trained):
+        if not any(carries_data(column) for column in trained):
             return {
                 "confidence_score": 0.0,
                 "is_anomaly": False,

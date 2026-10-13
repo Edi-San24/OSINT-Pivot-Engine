@@ -29,8 +29,8 @@ NON_INFRASTRUCTURE_TYPES = {
 DEFAULT_THRESHOLDS = (0.7, 0.4)
 
 # What each band was measured to mean for the domain model, out-of-fold across
-# eight resampled 5-fold splits of the published training set: HIGH 88.9% +/-
-# 0.8, MEDIUM 42.9% +/- 5.9, LOW 20.1% +/- 1.0 actually malicious.
+# eight resampled 5-fold splits of the published training set: HIGH 89.4% +/-
+# 1.0, MEDIUM 41.3% +/- 5.4, LOW 20.1% +/- 1.1 actually malicious.
 #
 # LOW is the one to read carefully. One in five indicators scored LOW is
 # malicious, and no threshold repairs that — even below 0.10 the rate is still
@@ -46,7 +46,7 @@ DEFAULT_THRESHOLDS = (0.7, 0.4)
 # These rates are conditional on a near 50/50 training distribution. The base
 # rate of domains an analyst actually investigates differs, so read them as the
 # model's discrimination, not as a population probability.
-DOMAIN_BAND_PRECISION = {"HIGH": 0.89, "MEDIUM": 0.43, "LOW": 0.20}
+DOMAIN_BAND_PRECISION = {"HIGH": 0.89, "MEDIUM": 0.41, "LOW": 0.20}
 
 # Retired with the IP model it described. Addresses are scored from evidence by
 # ConfidenceScorer.score_ip, not by a model, so there is no band to measure.

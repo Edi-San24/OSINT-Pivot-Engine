@@ -55,17 +55,25 @@ FEATURE_COLUMNS = [
 # "long established" rather than dominating the scale.
 MAX_AGE_DAYS = 3650
 
+# Age when the registry published no creation date. Outside the real range, so
+# the model can separate it from any genuine age including zero.
+AGE_UNKNOWN = -1
+
 
 def _age_days(created: str) -> int:
     """
-    Days since registration, 0 when unknown.
+    Days since registration, or AGE_UNKNOWN when no date was published.
 
     Free from RDAP, and the single most discriminating signal available on a
     domain: an eleven-day-old Dynadot registration and a seven-year-old business
     site are indistinguishable to a VirusTotal ratio.
+
+    Absence returns a sentinel rather than 0, because 0 is a real age and
+    several registries publish no creation date at all. Reporting both as 0
+    makes a decades-old domain on such a registry read as registered today.
     """
-    if not created or created in ("unknown", ""):
-        return 0
+    if not created or str(created) in ("unknown", "", "None"):
+        return AGE_UNKNOWN
     text = str(created)[:10]
     for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y"):
         try:
@@ -73,7 +81,7 @@ def _age_days(created: str) -> int:
             return max(0, min((datetime.now(timezone.utc) - when).days, MAX_AGE_DAYS))
         except ValueError:
             continue
-    return 0
+    return AGE_UNKNOWN
 
 def extract_features(pivot_result: dict) -> dict:
     """
@@ -113,7 +121,10 @@ def extract_features(pivot_result: dict) -> dict:
     domain_age_days = _age_days(
         registration.get("creation_date") or registration.get("created")
     )
-    domain_age_known = 1 if domain_age_days else 0
+    # Read from whether a date parsed, not from the age itself. Deriving it
+    # from the age makes it a restatement of "age is zero" and leaves it unable
+    # to mark the one case it exists for.
+    domain_age_known = 0 if domain_age_days == AGE_UNKNOWN else 1
 
     # Live DNS shape. A wildcard zone means every hostname resolves, which is
     # how generated attacker hostnames behave — though cPanel sets one by

@@ -12,7 +12,7 @@ from config import VERSION
 # the code that produced it. Two investigations carrying the same number and
 # different versions were not scored the same way, and the scoring paths here
 # have already changed several times.
-SCORER_VERSION = "1.0"
+SCORER_VERSION = "1.1"
 
 # What the digest covers, recorded alongside it so a reader does not have to
 # guess. The verdict sits outside it on purpose: re-scoring saved evidence is a
