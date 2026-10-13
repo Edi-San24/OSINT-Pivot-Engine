@@ -1,13 +1,6 @@
-# Selected investigations
+# Featured investigations
 
-Four of the pulses this engine produced, chosen for the decision each one
-required rather than for the number of indicators it carried.
-
-An OTX pulse description stops at 1024 characters, which is enough to say what
-was found and not enough to say what was left out. That reasoning is the point
-of this page. Every indicator named below is one that was published; the local
-audit files are not in this repository and will not be, because they record
-co-hosted third parties who are not part of any campaign.
+Some featured investigations conducted by the Pivot Engine
 
 ---
 
@@ -27,7 +20,7 @@ all, and the controls established uniform ownership, not that the rest of the
 range is in use or hostile.
 
 Every address came from a single ThreatFox reporter, so one reporter is one
-opinion and VirusTotal was used as the second source. The strength is not the
+opinion, and VirusTotal was used as the second source. The strength is not the
 depth of any one detection, which ran 3 to 8 of roughly 55, but that 87 of 87
 newly checked addresses showed detections with no exceptions.
 
