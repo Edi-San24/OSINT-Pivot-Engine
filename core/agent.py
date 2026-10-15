@@ -18,7 +18,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
  
 import config
 from config import ANTHROPIC_API_KEY
-from core.executor import PivotExecutor
+from core.executor import PivotExecutor, certificate_source
 from core.scorer import ConfidenceScorer
 from core.context import detect_infrastructure_type
 from core.graph_scorer import GraphScorer
@@ -226,9 +226,9 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             if is_ipv4(ip) and ip not in visited:
                 new_indicators.append(ip)
 
-        # crt.sh moved to its own key; older saved investigations still have
-        # it under "censys".
-        certs = results.get("crtsh") or results.get("censys") or {}
+        # crt.sh, the legacy key older saved investigations used, or the
+        # licensed fallback when crt.sh did not answer.
+        certs = certificate_source(results)
         for cert in certs.get("certificates", []):
             names = cert.get("names", "")
             for name in names.replace("\n", ",").split(","):

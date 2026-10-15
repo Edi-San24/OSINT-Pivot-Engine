@@ -138,6 +138,24 @@ def _run_parallel(tasks: dict, timeout: int = None) -> dict:
     return results
  
  
+def certificate_source(results: dict) -> dict:
+    """
+    Whichever source actually returned certificates, preferring the checkable one.
+
+    crt.sh first, because a reader can verify it without a subscription, then
+    the legacy key older saved investigations used, then the licensed fallback.
+
+    The choice is made on content rather than presence. A failed crt.sh lookup
+    still returns a dict, so an `or` chain selects it and then finds nothing
+    underneath, which is how a fallback ends up never being read.
+    """
+    for key in ("crtsh", "censys", "ssl_info"):
+        block = results.get(key) or {}
+        if block.get("certificates"):
+            return block
+    return {}
+
+
 def _record_seed_port(results: dict, port: int) -> None:
     """
     Keeps the port from a host:port seed, which the pivot itself drops.
@@ -265,8 +283,59 @@ class PivotExecutor:
         results = _run_parallel(tasks)
         _record_seed_port(results, port)
         self._expand_family(results)
+        self._certificate_fallback(results)
 
         return {"indicator": domain, "type": "domain", "results": results}
+
+    def _certificate_fallback(self, results: dict) -> None:
+        """
+        Certificate names from Iris when crt.sh did not answer.
+
+        crt.sh fails far more often than the domains asked about deserve, and
+        every failure costs the subject alternative names a pivot chains on.
+        Iris already holds those names for a domain it has a record of.
+
+        Written to its own key, and crt.sh keeps its error. Filling the crt.sh
+        result instead would erase a visibility gap and tell a reader that
+        certificate transparency answered when it did not. The note says the
+        names cannot be reproduced without the licence, because they cannot.
+        """
+        crtsh = results.get("crtsh") or {}
+        if crtsh.get("certificates"):
+            return
+
+        certificates = (results.get("domaintools") or {}).get("certificates") or []
+        if not certificates:
+            return
+
+        # Two different failures, and the quiet one is the more common. An
+        # exhausted retry at least says so. A 200 carrying an empty list looks
+        # like a domain with no certificates, and is indistinguishable from one
+        # until a second source is asked. Measured on a domain whose Let's
+        # Encrypt certificate names it in its own SANs: crt.sh returned zero,
+        # no error, no note.
+        reason = ("crt.sh did not answer" if crtsh.get("error")
+                  else "crt.sh returned no certificates for a domain that has them")
+
+        results["ssl_info"] = {
+            "indicator": crtsh.get("indicator", ""),
+            "type": "domain",
+            "source": "domaintools:ssl_info",
+            "licensed": True,
+            "certificate_count": len(certificates),
+            # Carries `names` in crt.sh's newline-joined shape, so everything
+            # downstream reads one format whichever source answered.
+            "certificates": [
+                {
+                    "sha1": c.get("sha1", ""),
+                    "subject": c.get("subject", ""),
+                    "names": "\n".join(c.get("alt_names") or []),
+                }
+                for c in certificates
+            ],
+            "note": f"{reason}, so these names come from a licensed source "
+                    "and a reader without it cannot check them.",
+        }
 
     def _expand_family(self, results: dict) -> None:
         """

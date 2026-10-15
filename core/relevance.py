@@ -16,6 +16,7 @@ import logging
 import yaml
 
 from config import ORG_PROFILE_PATH
+from core.executor import certificate_source
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ def _harvest(pivot_results: list) -> dict:
             except ValueError:
                 domains.add(value.lower())
 
-        certs = results.get("crtsh") or results.get("censys") or {}
+        certs = certificate_source(results)
         for cert in certs.get("certificates", []):
             for name in (cert.get("names", "") or "").replace("\n", ",").split(","):
                 name = name.strip().lstrip("*.").lower()

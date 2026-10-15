@@ -1560,6 +1560,88 @@ def check_dense_subnets() -> None:
           "unparseable input yields no blocks")
 
 
+def check_certificate_fallback() -> None:
+    """
+    crt.sh fails often enough that certificate names go missing for reasons
+    that have nothing to do with the domain, and the names it loses are the
+    ones a pivot chains on. Iris holds them, so the fallback exists.
+
+    What it must not do is hide the outage. crt.sh keeps its error, the
+    licensed names land under their own key, and the note says a reader
+    without the licence cannot check them. Overwriting the crt.sh result would
+    delete a visibility gap and claim certificate transparency answered.
+
+    The selection is pinned because of a trap that would make the whole thing
+    inert: a failed crt.sh lookup still returns a dict, so `crtsh or censys or
+    {}` picks the failure and reads no certificates out of it. The fallback
+    would be written on every outage and never once read. Choosing on content
+    rather than presence is the fix, and this is the test that keeps it.
+    """
+    print("\n-- certificates fall back to the licensed source, visibly --")
+    from core.executor import PivotExecutor, certificate_source
+
+    executor = PivotExecutor.__new__(PivotExecutor)
+    iris = {"certificates": [{"sha1": "aa11", "subject": "CN=d.test",
+                              "alt_names": ["d.test", "www.d.test"]}]}
+
+    answered = {"crtsh": {"certificate_count": 1,
+                          "certificates": [{"names": "a.test"}]},
+                "domaintools": iris}
+    executor._certificate_fallback(answered)
+    check("ssl_info" not in answered,
+          "a crt.sh that answered is left alone")
+    check(certificate_source(answered) is answered["crtsh"],
+          "and stays the source, because a reader can check it")
+
+    failed = {"crtsh": {"error": "502 Server Error", "certificates": [],
+                        "indicator": "d.test"},
+              "domaintools": iris}
+    executor._certificate_fallback(failed)
+    check(failed.get("ssl_info", {}).get("licensed") is True,
+          "a crt.sh outage falls back to the licensed names")
+    check(failed["crtsh"].get("error"),
+          "and the outage is still reported rather than papered over")
+    check("licensed" in (failed["ssl_info"].get("note") or ""),
+          "the note says the names cannot be checked without the licence")
+    check(failed["ssl_info"]["certificates"][0]["names"] == "d.test\nwww.d.test",
+          "names arrive in the shape every consumer already reads")
+
+    # The quieter failure, and the one that actually happens. crt.sh answers
+    # 200 with an empty list for a domain whose certificate names it in its
+    # own SANs. There is no error to trigger on, so triggering on the error
+    # alone would miss the case the fallback exists for.
+    quiet = {"crtsh": {"certificate_count": 0, "certificates": [],
+                       "indicator": "d.test"},
+             "domaintools": iris}
+    executor._certificate_fallback(quiet)
+    check(quiet.get("ssl_info", {}).get("certificate_count") == 1,
+          "a crt.sh that answers with nothing is treated as a gap, not an answer")
+    check("has them" in (quiet["ssl_info"].get("note") or ""),
+          "and the note says which of the two failures it was")
+
+    bare = {"crtsh": {"error": "502", "certificates": []},
+            "domaintools": {"found": False}}
+    executor._certificate_fallback(bare)
+    check("ssl_info" not in bare,
+          "no licensed record means nothing is invented")
+
+    nothing = {"crtsh": {"certificate_count": 0, "certificates": []},
+               "domaintools": {"found": True, "certificates": []}}
+    executor._certificate_fallback(nothing)
+    check("ssl_info" not in nothing,
+          "two sources agreeing on none is an answer, not a gap")
+
+    # The trap, stated as the comparison that would have hidden it.
+    trap = {"crtsh": {"error": "502", "certificates": []},
+            "ssl_info": {"source": "domaintools:ssl_info",
+                         "certificates": [{"names": "z.test"}]}}
+    stale = trap.get("crtsh") or trap.get("censys") or {}
+    check(not stale.get("certificates"),
+          "an or-chain selects the failed lookup and reads nothing")
+    check(certificate_source(trap).get("certificates"),
+          "choosing on content reaches the fallback instead")
+
+
 def check_spf_parsing() -> None:
     """
     An SPF record names addresses its own operator authorises, which is the one
@@ -2294,6 +2376,7 @@ def main() -> int:
     check_otx_coverage_states()
     check_dense_subnets()
     check_ct_monitor_diff()
+    check_certificate_fallback()
     check_spf_parsing()
     check_structural_patterns()
     check_score_display()
