@@ -146,3 +146,54 @@ block the hostname and leave the parent alone. And two certificates the export
 tooling proposed that belonged to the victims rather than the operator, one of
 them a wildcard covering an entire firm's domain, which would have flagged all
 of that company's legitimate traffic.
+
+---
+
+## Guildma C2 named from telenovelas and Brazilian flowers
+
+[Pulse](https://otx.alienvault.com/pulse/6ad049e3c5c151c394656706) · 14 October 2026 · 26 indicators · TLP:GREEN
+
+**Target.** Guildma and Astaroth, the Brazilian banking trojan family, reached
+by querying the family tags rather than any single address.
+
+**What came out of it.** Two registration vocabularies, used by one operator.
+Eleven `.sbs` domains, of which nine are Spanish-language telenovela titles,
+one registered in its Portuguese form rather than the Spanish original. Four
+`.cfd` domains pairing the Portuguese word for flowers with a botanical genus,
+one of them a tree known in Brazil as chuva-de-ouro. Beneath both sit generated
+labels that are pronounceable rather than random. Two live staging hosts on
+provider-assigned VPS hostnames, one Guildma and one Grandoreiro, stood up a
+day apart.
+
+**Insights.** The naming defeats entropy-based detection by construction. A
+real word scores like a brand on entropy, vowel ratio and consonant runs, so a
+classifier tuned for random-looking names reads the registrable layer as
+ordinary. The operator has split the problem: dictionary words where
+registration costs money and a human might look, generated labels beneath,
+where neither applies. That also makes the signature generative rather than
+descriptive, because a wordlist can be enumerated and watched ahead of use.
+
+The flower set then did something the telenovela set did not. In September it
+gained click-tracking and sending subdomains with a DKIM selector for each
+domain, so year-old trojan infrastructure was rebuilt as authenticated mail.
+Those mail names carry the pulse's GREEN label: no free feed holds them, and a
+reader without a licence cannot check them.
+
+What the vocabulary does not establish is nationality, and the pulse does not
+claim it. Televisa exported these titles across Latin America and into Brazil
+in Portuguese dubs. If anything the Portuguese-form registration points the
+same way the family already does.
+
+**Withheld.** The address the domains now park on, which carries 68 unrelated
+tenants. A second staging host shared with an unrelated German campaign. Two
+provider addresses, since the per-instance hostnames retire with the VPS and
+the addresses pass to the next customer. And a certificate the export tooling
+proposed that belonged to the hosting provider rather than this operator,
+which would have flagged every customer on it.
+
+The mail subdomains were nearly left out too. On first reading they could have
+been the parking service's own configuration, and publishing them on that
+assumption would have been a guess. Testing the pattern against fourteen
+unrelated tenants of the same address, including several with more than
+seventy names apiece, found none carrying it. That measurement is what moved
+them from a hunch to an indicator.
