@@ -2294,6 +2294,167 @@ def check_seed_formats() -> None:
           "no port survives into either list")
 
 
+def check_cve() -> None:
+    """
+    A CVE is its own indicator type, scored on exploitation, and an outage never
+    reads as an answer.
+
+    The ID used to detect as a username, which sent it down the identity path
+    and returned nothing. And the catalog lookups have the classic absence trap:
+    a KEV download that fails must not read as "CISA has no exploitation on
+    record", and an unscored record must not read as a low severity.
+    """
+    import tempfile
+    import connectors.cve as cve_mod
+    from core.agent import extract_new_indicators
+    from core.stix_exporter import select_indicators
+
+    print("\n-- a CVE ID is detected as a CVE --")
+    for seed in ("CVE-2024-3400", "cve-2023-1389", "CVE-2021-1234567"):
+        check((detect_type(seed) or {}).get("type") == "cve",
+              f"{seed} -> {(detect_type(seed) or {}).get('type')}")
+    for seed, kind in (("CVE-24-3400", "username"), ("cve_hunter", "username")):
+        check((detect_type(seed) or {}).get("type") == kind,
+              f"a near miss stays {kind}: {seed} -> {(detect_type(seed) or {}).get('type')}")
+
+    print("\n-- the sources parse, and silence stays distinct from an answer --")
+    analyzed = {"vulnerabilities": [{"cve": {
+        "id": "CVE-2024-3400", "vulnStatus": "Analyzed",
+        "descriptions": [{"lang": "en", "value": "Command injection.\n\nSecond paragraph."}],
+        "metrics": {
+            "cvssMetricV31": [
+                {"source": "vendor", "type": "Secondary",
+                 "cvssData": {"version": "3.1", "baseScore": 10.0, "baseSeverity": "CRITICAL"}},
+                {"source": "nvd@nist.gov", "type": "Primary",
+                 "cvssData": {"version": "3.1", "baseScore": 9.8, "baseSeverity": "CRITICAL"}}],
+            "ssvcV203": [{"ssvcData": {"options": [{"exploitation": "active"},
+                                                   {"automatable": "yes"}], "role": "CISA"}}]},
+        "affected": [{"affectedData": [{"vendor": "Palo Alto Networks", "product": "PAN-OS"}]}],
+        "references": [{"url": "https://example.org/poc", "tags": ["Exploit"]}],
+    }}]}
+    nvd = cve_mod.parse_nvd(analyzed, "CVE-2024-3400")
+    check(nvd["cvss"]["score"] == 9.8, f"NVD's own Primary score wins -> {nvd['cvss']}")
+    check(nvd["ssvc"].get("exploitation") == "active", f"SSVC is read -> {nvd['ssvc']}")
+    check(nvd["description"] == "Command injection.", "the first paragraph is kept")
+    check(nvd["products"] == ["Palo Alto Networks PAN-OS"], f"products -> {nvd['products']}")
+    unnamed = cve_mod.parse_nvd({"vulnerabilities": [{"cve": {"affected": [{"affectedData": [
+        {"vendor": "n/a", "product": "TP-Link Archer AX21"}]}]}}]}, "CVE-2023-1389")
+    check(unnamed["products"] == ["TP-Link Archer AX21"],
+          f"a CNA's 'n/a' vendor is dropped -> {unnamed['products']}")
+
+    awaiting = cve_mod.parse_nvd({"vulnerabilities": [{"cve": {
+        "id": "CVE-2026-1", "vulnStatus": "Awaiting Analysis", "metrics": {}}}]}, "CVE-2026-1")
+    check(awaiting["found"] and awaiting["cvss"] is None,
+          "an unscored record has no severity rather than a zero one")
+    check(cve_mod.parse_nvd({"vulnerabilities": []}, "CVE-2099-1") == {
+        "indicator": "CVE-2099-1", "type": "cve", "source": "nvd", "found": False},
+          "an empty NVD answer is 'no record', not an error")
+
+    catalog = {"catalogVersion": "2026.10.23", "count": 1,
+               "vulnerabilities": [{"cveID": "CVE-2024-3400", "dateAdded": "2024-04-12",
+                                    "knownRansomwareCampaignUse": "Known"}]}
+    listed = cve_mod.kev_entry(catalog, "CVE-2024-3400")
+    check(listed["found"] and listed["ransomware_use"] == "Known", f"KEV listing -> {listed}")
+    check(cve_mod.kev_entry(catalog, "CVE-2020-1")["found"] is False,
+          "a CVE missing from a fetched catalog is not listed")
+
+    def refused(*args, **kwargs):
+        raise cve_mod.requests.exceptions.ConnectionError("unreachable")
+
+    saved_get, saved_cache = cve_mod.requests.get, dict(cve_mod._kev_cache)
+    cve_mod.requests.get = refused
+    cve_mod._kev_cache.update(fetched=0.0, catalog=None)
+    try:
+        outage = cve_mod.CVEConnector().query_kev("CVE-2024-3400")
+    finally:
+        cve_mod.requests.get = saved_get
+        cve_mod._kev_cache.update(saved_cache)
+    check("error" in outage and "found" not in outage,
+          f"a failed catalog download is an error, never 'not listed' -> {outage}")
+
+    check(cve_mod.parse_epss({"status": "OK", "data": []}, "CVE-2026-1")["found"] is False,
+          "an unscored CVE is not an EPSS of zero")
+
+    print("\n-- the level is exploitation priority, and unknown when unanswered --")
+    scorer = ConfidenceScorer()
+
+    def level(**results):
+        return scorer.score_cve({"type": "cve", "results": results}).get("risk_level")
+
+    quiet = {"nvd": awaiting, "kev": {"found": False}, "epss": {"found": True, "epss": 0.001},
+             "threatfox_tag": {"found": False}, "urlhaus_tag": {"found": False},
+             "malwarebazaar_tag": {"found": False}}
+    check(level(**quiet) == "LOW", f"answered and quiet is LOW -> {level(**quiet)}")
+    check(level(**{**quiet, "kev": listed}) == "HIGH", "a KEV listing is HIGH")
+    check(level(**{**quiet, "nvd": nvd}) == "HIGH", "SSVC exploitation: active is HIGH")
+    check(level(**{**quiet, "epss": {"found": True, "epss": 0.5}}) == "MEDIUM",
+          f"an EPSS of 0.5 alone is MEDIUM -> {level(**{**quiet, 'epss': {'found': True, 'epss': 0.5}})}")
+    critical_unexploited = {**quiet, "nvd": {**nvd, "ssvc": {}}}
+    check(level(**critical_unexploited) == "LOW",
+          "a critical CVSS with no exploitation evidence does not raise the level")
+    outage_all = {key: {"error": "timed out"} for key in quiet}
+    check(level(**outage_all) == "UNKNOWN", "nothing answered is UNKNOWN, not LOW")
+    nowhere = {**quiet, "nvd": {"found": False}, "epss": {"found": False}}
+    check(level(**nowhere) == "UNKNOWN", "an ID no source has a record of is UNKNOWN")
+    check(level(**{**nowhere, "threatfox_tag": {"found": True}}) == "HIGH",
+          "but a reserved ID a feed tags as exploited is not dismissed")
+
+    print("\n-- findings say what absence means, and the pivot reaches hosts --")
+    sample = "a" * 64
+    pivot = {"indicator": "CVE-2024-3400", "type": "cve", "results": {
+        **quiet, "nvd": {**nvd, "description": "First sentence here. " * 30},
+        "epss": {"found": True, "epss": 0.99999, "percentile": 0.99992},
+        "threatfox_tag": {"found": True, "unique_hosts": 3, "last_seen": "2026-10-20",
+                          "malware_families": {"Mirai": 3},
+                          "hosts": [{"host": "45.9.148.10"}, {"host": "10.0.0.5"},
+                                    {"host": "bad.example.net"}]},
+        "malwarebazaar_tag": {"found": True, "sample_count": 1, "samples": [
+            {"sha256": sample, "malware_family": "Mirai"}]}}}
+    found = extract_findings(pivot)
+    check(any("not in CISA's Known Exploited" in f and "not the same as none" in f
+              for f in found), "an unlisted CVE is not described as unexploited")
+    check(any("at over 99.9%" in f for f in found) and not any("100.0%" in f for f in found),
+          "an EPSS just under one is not printed as a certainty")
+    check(found[0].endswith("here."), f"a long description ends on a whole sentence -> "
+                                      f"...{found[0][-24:]!r}")
+    check(any("MalwareBazaar tags 1 sample(s) with it (Mirai)" in f for f in found),
+          "tagged samples are reported with their family")
+    check(not any("Known Exploited" in f for f in extract_findings(
+        {**pivot, "results": {**pivot["results"], "kev": {"error": "timed out"}}})),
+          "a KEV outage makes no claim about the catalog at all")
+    chained = extract_new_indicators(pivot, ["CVE-2024-3400"])
+    check("45.9.148.10" in chained and "bad.example.net" in chained,
+          f"tagged hosts are chained -> {chained}")
+    check("10.0.0.5" not in chained, "and private space is not")
+    check(sample in chained, "tagged samples are chained into hash pivots")
+
+    print("\n-- a CVE publishes to OTX under its own type --")
+    included, _ = select_indicators([{"indicator": "CVE-2024-3400", "risk_level": "HIGH",
+                                      "visited": ["CVE-2024-3400"],
+                                      "full_results": [pivot]}])
+    check([e["type"] for e in included if e["indicator"] == "CVE-2024-3400"] == ["CVE"],
+          f"the seed is typed CVE -> {[(e['indicator'], e['type']) for e in included]}")
+
+    print("\n-- a certificate stays a certificate in STIX --")
+    fingerprint = "ee6324a2c40441f34cde9ca5fb66aa4329544713"
+    investigation = {"indicator": "quiet.example", "risk_level": "HIGH",
+                     "visited": ["quiet.example"], "full_results": [
+                         {"indicator": "quiet.example", "type": "domain", "results": {
+                             "threatfox": {"found": True, "max_confidence": 100},
+                             "domaintools": {"certificates": [
+                                 {"sha1": fingerprint, "domains_on_cert": 1}]}}}]}
+    included, _ = select_indicators([investigation])
+    cert = next((e for e in included if e["indicator"] == fingerprint), {})
+    check(cert.get("type") == "FileHash-SHA1" and cert.get("kind") == "certificate",
+          f"published as the type OTX stores, marked as a certificate -> {cert}")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = STIXExporter().export(investigation, os.path.join(tmp, "b.json"))
+        bundle = open(path).read() if path else ""
+    check(f"x509-certificate:hashes.'SHA-1' = '{fingerprint}'" in bundle
+          and f"file:hashes.'SHA-1' = '{fingerprint}'" not in bundle,
+          "and patterned as a certificate in STIX, not as a file")
+
+
 def check_verdict_is_deterministic(scorer: ConfidenceScorer) -> None:
     """
     Pins the one thing about the verdict that was never true before: two runs
@@ -2407,6 +2568,7 @@ def main() -> int:
     check_ct_monitor_diff()
     check_certificate_fallback()
     check_spf_parsing()
+    check_cve()
     check_structural_patterns()
     check_score_display()
     check_stix_bundle_contract()

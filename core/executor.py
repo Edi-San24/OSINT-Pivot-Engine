@@ -41,6 +41,7 @@ from connectors.spiderfoot import SpiderFootConnector
 from connectors.urlhaus import URLhausConnector
 from connectors.threatfox import ThreatFoxConnector
 from connectors.otx import OTXConnector
+from connectors.cve import CVEConnector, normalize as normalize_cve
  
 logging.basicConfig(
     level=logging.ERROR,
@@ -53,8 +54,13 @@ logger = logging.getLogger(__name__)
 REQUEST_TIMEOUT = 25
 ALLOWED_TYPES = {
     "ipv4", "domain", "url", "md5", "sha1", "sha256",
-    "email", "username", "threat_group", "software"
+    "email", "username", "threat_group", "software", "cve"
 }
+
+# A CVE pivot waits on NVD, whose response time varies widely, and on a
+# ThreatFox tag query whose own timeout is 45s. Wider than the default fan-out
+# for those two only.
+CVE_TIMEOUT = 50
 
 # Dual-use tooling worth chaining anyway — offensive frameworks that do
 # circulate as samples. Everything else MITRE types as "tool" is a
@@ -198,6 +204,7 @@ class PivotExecutor:
         self.urlhaus = URLhausConnector()
         self.threatfox = ThreatFoxConnector()
         self.otx = OTXConnector()
+        self.cve = CVEConnector()
         logger.info("Pivot executor initialized.")
  
     def validate(self, seed: str) -> dict:
@@ -608,6 +615,30 @@ class PivotExecutor:
  
         return {"indicator": name, "type": "software", "results": results}
  
+    def pivot_cve(self, cve: str, deep: bool = False) -> dict:
+        """
+        A vulnerability rather than infrastructure: what it is, whether its
+        exploitation is confirmed or forecast, and which hosts the feeds tie to it.
+
+        The feed lookups are tag searches and live under their own keys. Under
+        "threatfox" and "urlhaus" they would read as the CVE itself being listed,
+        which is what those keys mean on every other pivot.
+        """
+        cve = normalize_cve(cve)
+        logger.info(f"Starting CVE pivot for: {cve}")
+
+        tasks = {
+            "nvd": lambda: self.cve.query_nvd(cve),
+            "kev": lambda: self.cve.query_kev(cve),
+            "epss": lambda: self.cve.query_epss(cve),
+            "otx": lambda: self.otx.query_indicator(cve, "cve"),
+            "threatfox_tag": lambda: self.threatfox.query_tag(cve),
+            "urlhaus_tag": lambda: self.urlhaus.query_malware_family(cve),
+            "malwarebazaar_tag": lambda: self.bazaar.query_tag(cve),
+        }
+        results = _run_parallel(tasks, timeout=CVE_TIMEOUT)
+        return {"indicator": cve, "type": "cve", "results": results}
+
     def pivot_email(self, email: str, deep: bool = False) -> dict:
         """
         Queries SpiderFoot for email address intelligence.
@@ -813,6 +844,8 @@ class PivotExecutor:
             return self.pivot_group(indicator, deep=deep)
         elif indicator_type == "software":
             return self.pivot_software(indicator, deep=deep)
+        elif indicator_type == "cve":
+            return self.pivot_cve(indicator, deep=deep)
         elif indicator_type == "email":
             return self.pivot_email(indicator, deep=deep)
         elif indicator_type == "username":

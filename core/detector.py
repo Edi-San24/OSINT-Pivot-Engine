@@ -262,6 +262,13 @@ PATTERNS = {
         r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$"
     ),
 
+    # Year, then a sequence of four or more digits, which is the whole CVE ID
+    # syntax. Ordered ahead of username, which would otherwise claim every ID.
+    "cve": re.compile(
+        r"^CVE-\d{4}-\d{4,}$",
+        re.IGNORECASE,
+    ),
+
     "username": re.compile(
         r"^[a-zA-Z0-9._\-]{3,30}$"
 
@@ -282,7 +289,7 @@ PATTERNS = {
 # letter, which is a property of how fast someone types, not of the indicator.
 # Both are resolved by name lookup in detect_type now. The software regex was
 # unreachable anyway — threat_group held an identical pattern and ran first.
-DETECTION_ORDER = ["url", "email", "ipv4", "sha256", "sha1", "md5", "domain", "username"]
+DETECTION_ORDER = ["url", "email", "cve", "ipv4", "sha256", "sha1", "md5", "domain", "username"]
 
 
 def _detected(seed: str, indicator_type: str, confidence: str) -> dict:

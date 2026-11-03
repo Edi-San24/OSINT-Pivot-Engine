@@ -36,7 +36,7 @@ Four of the investigations it produced are written up in [docs/INVESTIGATIONS.md
 
 ```
    you type one indicator
-   (IP, domain, URL, file hash, email, username, threat group, malware family)
+   (IP, domain, URL, file hash, CVE, email, username, threat group, malware family)
             |
    it works out what kind of thing that is
             |
@@ -76,8 +76,13 @@ Nothing in that loop is AI-driven. Ordinary code decides which lookup to run nex
 | MITRE ATT&CK | TTP mapping, group profiling, malware attribution |
 | Ahmia | Dark web index search across .onion space |
 | SpiderFoot | Email and username footprint (requires `--deep`) |
+| NVD | What a CVE is, its severity, affected products, CISA's SSVC triage |
+| CISA KEV | Whether exploitation of a CVE is confirmed, and known ransomware use |
+| EPSS | Likelihood a CVE is exploited in the next 30 days |
 
-**Indicator types:** IPv4, domain, URL, MD5/SHA1/SHA256, threat group, malware family, email, username.
+**Indicator types:** IPv4, domain, URL, MD5/SHA1/SHA256, CVE, threat group, malware family, email, username.
+
+A CVE is scored on exploitation rather than severity: confirmed in CISA's catalog, recorded as actively exploited in CISA's triage, tagged on live infrastructure in the feeds, or forecast by EPSS. The pivot then follows the hosts the feeds tag with it.
 
 ---
 

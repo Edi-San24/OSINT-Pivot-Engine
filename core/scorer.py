@@ -402,6 +402,70 @@ class ConfidenceScorer:
             "note": "Score derived from MalwareBazaar sample volume and malware category tags.",
         }
 
+    # Exploitation evidence for a CVE, combined by noisy-OR as on the evidence
+    # path. CISA's catalog and its SSVC "active" are confirmation; a feed tag
+    # ties the CVE to live infrastructure or to samples built on it. EPSS enters
+    # as its own probability, since that is what it already is.
+    CVE_EVIDENCE_CEILINGS = {"kev": 0.95, "ssvc_active": 0.90, "threatfox_tag": 0.75,
+                             "urlhaus_tag": 0.60, "malwarebazaar_tag": 0.60}
+
+    def score_cve(self, pivot_result: dict) -> dict:
+        """
+        Exploitation priority, which is what a CVE is triaged on.
+
+        Severity is reported in the findings and does not raise the score: a
+        critical CVE nobody exploits is a patching task rather than a threat.
+        UNKNOWN when no exploitation source answered, or when no source has any
+        record of the ID at all.
+        """
+        results = pivot_result.get("results", {})
+        nvd = results.get("nvd") or {}
+        kev = results.get("kev") or {}
+        epss = results.get("epss") or {}
+        tagged = {key: results.get(key) or {}
+                  for key in ("threatfox_tag", "urlhaus_tag", "malwarebazaar_tag")}
+        ssvc = (nvd.get("ssvc") or {}) if "error" not in nvd else {}
+
+        answered = [s for s in (kev, epss, *tagged.values()) if s and "error" not in s]
+        if ssvc:
+            answered.append(ssvc)
+        # A reserved ID can be exploited, and tagged, before NVD publishes it.
+        unpublished = nvd.get("found") is False and not any(
+            s.get("found") for s in (kev, epss, *tagged.values()))
+
+        if not answered or unpublished:
+            return {
+                "confidence_score": 0.0,
+                "is_anomaly": False,
+                "risk_level": "UNKNOWN",
+                "note": ("No source has a record of this CVE ID." if unpublished else
+                         "No exploitation source answered, so priority cannot be judged."),
+            }
+
+        signals = []
+        if kev.get("found"):
+            signals.append(("CISA KEV", self.CVE_EVIDENCE_CEILINGS["kev"]))
+        if str(ssvc.get("exploitation", "")).lower() == "active":
+            signals.append(("CISA SSVC active", self.CVE_EVIDENCE_CEILINGS["ssvc_active"]))
+        for key, block in tagged.items():
+            if block.get("found"):
+                signals.append((key, self.CVE_EVIDENCE_CEILINGS[key]))
+        if epss.get("found") and epss.get("epss") is not None:
+            signals.append(("EPSS", float(epss["epss"])))
+
+        remaining = 1.0
+        for _, value in signals:
+            remaining *= 1 - value
+        score = 1 - remaining
+
+        return {
+            "confidence_score": round(score, 4),
+            "is_anomaly": False,
+            **self._risk_fields(score),
+            "note": ("Exploitation priority from CISA KEV, CISA SSVC, feed tags and EPSS. "
+                     "Severity is reported but does not raise it."),
+        }
+
     # VirusTotal detections earning full marks on an address. Deliberately low,
     # and much lower than the file threshold, because VirusTotal is slow on
     # fresh infrastructure: an address a feed rates at high confidence commonly
@@ -652,6 +716,7 @@ class ConfidenceScorer:
           threat_group -> score_threat_group (MITRE ATT&CK coverage)
           software     -> score_software     (MalwareBazaar sample volume)
           hash         -> score_hash         (detections, catalogue, ATT&CK)
+          cve          -> score_cve          (exploitation: KEV, SSVC, feed tags, EPSS)
           ipv4/url     -> score_from_evidence (ThreatFox, URLhaus, VT, OTX)
           email/username/filename -> score_identity (SpiderFoot findings)
           domain                  -> score (ML model), or score_from_evidence
@@ -665,6 +730,8 @@ class ConfidenceScorer:
             return self.score_software(pivot_result)
         elif indicator_type == "hash":
             return self.score_hash(pivot_result)
+        elif indicator_type == "cve":
+            return self.score_cve(pivot_result)
         elif indicator_type in {"email", "username", "filename"}:
             return self.score_identity(pivot_result)
         elif indicator_type == "domain" and self.domain_gb is not None:

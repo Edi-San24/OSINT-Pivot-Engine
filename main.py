@@ -147,6 +147,7 @@ def run(seed, depth, deep, output, export_stix, screen, verbose):
       File hash         MD5, SHA1, or SHA256
       Threat group      Lazarus Group
       Malware family    WannaCry
+      CVE               CVE-2024-3400
       Email             analyst@example.com
       Username          threat_actor_handle
     """

@@ -293,6 +293,7 @@ OTX_TYPES = {
     "sha1": "FileHash-SHA1",
     "sha256": "FileHash-SHA256",
     "email": "email",
+    "cve": "CVE",
 }
 
 # Engine types that are not OTX indicators. A threat group belongs in a pulse's
@@ -318,6 +319,7 @@ ENGINE_TYPE_BY_OTX = {
     "FileHash-SHA1": "sha1",
     "FileHash-SHA256": "sha256",
     "email": "email",
+    "CVE": "cve",
     "SSLCertFingerprint": "certificate",
 }
 

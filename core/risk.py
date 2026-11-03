@@ -10,7 +10,7 @@ import time
 # Types the graph and temporal layers do not apply to, so core.agent blends them
 # by chained evidence instead.
 NON_INFRASTRUCTURE_TYPES = {
-    "threat_group", "software", "email", "username", "filename"
+    "threat_group", "software", "email", "username", "filename", "cve"
 }
 
 # The scorer is authoritative for every indicator type. resolve_risk_level reads

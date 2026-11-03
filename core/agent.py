@@ -274,6 +274,21 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             if is_ipv4(host) or is_domain(host):
                 new_indicators.append(host)
 
+    elif indicator_type == "cve":
+        # Hosts a feed tags with the CVE, so the pivot continues from the
+        # vulnerability into infrastructure seen exploiting it or serving for it.
+        for host in (results.get("threatfox_tag") or {}).get("hosts") or []:
+            value = (host.get("host") or "").strip()
+            if value and (is_ipv4(value) or is_domain(value)) and value not in visited:
+                new_indicators.append(value)
+
+        # Samples tagged with it, whose hash pivots follow the hosts serving them.
+        # This reaches infrastructure even where no host carries the tag.
+        for sample in (results.get("malwarebazaar_tag") or {}).get("samples") or []:
+            sha256 = sample.get("sha256", "")
+            if sha256 and sha256 != "unknown" and sha256 not in visited:
+                new_indicators.append(sha256)
+
     elif indicator_type == "threat_group":
         # Samples labelled with the actor's own name come first: they are
         # attributed to the group, where a sample of commodity tooling the
@@ -336,11 +351,95 @@ def run_pivot(state: AgentState) -> AgentState:
     return state
  
  
+def _cve_findings(cve: str, results: dict) -> list[str]:
+    """
+    What a vulnerability is, whether its exploitation is confirmed or forecast,
+    and what infrastructure is tied to it. A source that failed says nothing
+    here; the visibility gaps name it instead.
+    """
+    findings = []
+
+    nvd = results.get("nvd") or {}
+    if nvd.get("found"):
+        description = nvd.get("description") or ""
+        if len(description) > 400:
+            # Whole sentences, so a cap never ends a finding mid-clause.
+            cut = description[:400].rfind(". ")
+            description = description[:cut + 1] if cut > 0 else description[:400] + "..."
+        if description:
+            findings.append(f"{cve}: {description}")
+        cvss = nvd.get("cvss")
+        if cvss:
+            findings.append(f"{cve}: CVSS {cvss['version']} base score {cvss['score']}, "
+                            f"{str(cvss['severity']).lower()}.")
+        else:
+            findings.append(f"{cve}: no severity score yet, NVD status {nvd.get('status')}.")
+        if nvd.get("products"):
+            findings.append(f"{cve}: affects {', '.join(nvd['products'][:5])}.")
+        ssvc = nvd.get("ssvc") or {}
+        if ssvc.get("exploitation"):
+            automatable = (f", automatable: {ssvc['automatable']}"
+                           if ssvc.get("automatable") else "")
+            findings.append(f"{cve}: CISA's SSVC triage records exploitation as "
+                            f"{ssvc['exploitation']}{automatable}.")
+        if nvd.get("exploit_references"):
+            findings.append(f"{cve}: NVD tags {len(nvd['exploit_references'])} reference(s) "
+                            f"as exploit code, e.g. {nvd['exploit_references'][0]}")
+    elif nvd.get("found") is False:
+        findings.append(f"{cve}: NVD has no record of this ID. It may be reserved, "
+                        "rejected or mistyped.")
+
+    kev = results.get("kev") or {}
+    if kev.get("found"):
+        findings.append(f"{cve}: in CISA's Known Exploited Vulnerabilities catalog since "
+                        f"{kev.get('date_added')}. Known ransomware use: "
+                        f"{kev.get('ransomware_use')}.")
+    elif kev.get("found") is False:
+        findings.append(f"{cve}: not in CISA's Known Exploited Vulnerabilities catalog. "
+                        "CISA has not confirmed exploitation, which is not the same as none.")
+
+    epss = results.get("epss") or {}
+    if epss.get("found") and epss.get("epss") is not None:
+        # Rounding would print 0.9999 as a certainty, which EPSS never states.
+        chance = "over 99.9%" if epss["epss"] >= 0.999 else f"{epss['epss']:.1%}"
+        rank = (f", above {min(epss['percentile'], 0.999):.1%} of scored CVEs"
+                if epss.get("percentile") is not None else "")
+        findings.append(f"{cve}: EPSS puts the chance of exploitation activity in the "
+                        f"next 30 days at {chance}{rank}.")
+    elif epss.get("found") is False:
+        findings.append(f"{cve}: EPSS has no score for it yet.")
+
+    threatfox = results.get("threatfox_tag") or {}
+    if threatfox.get("found"):
+        families = ", ".join(list(threatfox.get("malware_families") or {})[:3])
+        findings.append(f"{cve}: ThreatFox tags {threatfox.get('unique_hosts')} host(s) "
+                        f"with it{f' ({families})' if families else ''}, most recently "
+                        f"{str(threatfox.get('last_seen'))[:10]}.")
+
+    urlhaus = results.get("urlhaus_tag") or {}
+    if urlhaus.get("found"):
+        findings.append(f"{cve}: URLhaus tags {urlhaus.get('url_count')} URL(s) with it, "
+                        f"{urlhaus.get('online_count', 0)} online.")
+
+    bazaar = results.get("malwarebazaar_tag") or {}
+    if bazaar.get("found"):
+        families = sorted({s.get("malware_family") for s in bazaar.get("samples") or []
+                           if s.get("malware_family") not in (None, "", "unknown")})
+        named = f" ({', '.join(families[:3])})" if families else ""
+        findings.append(f"{cve}: MalwareBazaar tags {bazaar.get('sample_count')} "
+                        f"sample(s) with it{named}.")
+
+    return findings
+
+
 def extract_findings(result: dict) -> list[str]:
     """Builds the findings list for one pivot result from connector output."""
     findings: list[str] = []
     indicator = result.get("indicator", "")
     results = result.get("results", {})
+
+    if result.get("type") == "cve":
+        findings.extend(_cve_findings(indicator, results))
 
     # VirusTotal — detection consensus and family label
     vt = results.get("virustotal", {})
@@ -866,11 +965,14 @@ def apply_context(state: AgentState) -> AgentState:
     if indicator_type in NON_INFRASTRUCTURE_TYPES:
         blended_score, chain = _apply_chain_evidence(ml_score, state)
         if chain:
-            state["findings"].append(
-                f"CHAIN EVIDENCE: {chain['indicator']} scored {chain['score']} on its own "
-                f"pivot, raising the {indicator_type} score from {ml_score} to "
-                f"{round(blended_score, 4)}."
-            )
+            # Stated only when it moved the score. A seed already at the ceiling
+            # would otherwise read as raised from 1.0 to 1.0.
+            if round(blended_score, 4) > round(ml_score, 4):
+                state["findings"].append(
+                    f"CHAIN EVIDENCE: {chain['indicator']} scored {chain['score']} on its "
+                    f"own pivot, raising the {indicator_type} score from {ml_score} to "
+                    f"{round(blended_score, 4)}."
+                )
             # Chained evidence is data, whatever the seed pivot managed on its own.
             state["insufficient_data"] = False
     else:
