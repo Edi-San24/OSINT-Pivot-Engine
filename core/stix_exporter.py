@@ -220,7 +220,8 @@ class STIXExporter:
         for entry in included:
             name = entry["indicator"]
             key = name.strip().lower()
-            itype = engine_type.get(key) or ENGINE_TYPE_BY_OTX.get(entry.get("type", ""), "")
+            itype = (engine_type.get(key) or entry.get("kind")
+                     or ENGINE_TYPE_BY_OTX.get(entry.get("type", ""), ""))
             is_seed = key == seed.strip().lower()
             built = self._add_indicator(
                 name, itype, level=level,
@@ -319,6 +320,11 @@ ENGINE_TYPE_BY_OTX = {
     "email": "email",
     "SSLCertFingerprint": "certificate",
 }
+
+# OTX has no certificate type and silently drops SSLCertFingerprint, so a
+# thumbprint publishes under the hash type that stores it. Entries carry
+# kind="certificate" so STIX still patterns them as certificates, not files.
+CERTIFICATE_OTX_TYPE = "FileHash-SHA1"
 
 
 def otx_type(name: str, itype: str) -> str:
@@ -940,7 +946,8 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
                 if owner and owner not in publishable:
                     excluded.append({
                         "indicator": sha1,
-                        "type": "SSLCertFingerprint",
+                        "type": CERTIFICATE_OTX_TYPE,
+                        "kind": "certificate",
                         "reason": (
                             f"certificate belongs to {owner}, which was not "
                             "published, so publishing it would identify that "
@@ -950,7 +957,8 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
                 elif shared == 1:
                     included.append({
                         "indicator": sha1,
-                        "type": "SSLCertFingerprint",
+                        "type": CERTIFICATE_OTX_TYPE,
+                        "kind": "certificate",
                         "engine_risk_level": investigation.get("risk_level", "unknown"),
                         # Kept so a later analyst exclusion of the domain can
                         # take its fingerprints with it. Audit detail only; the
@@ -960,7 +968,8 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
                 else:
                     excluded.append({
                         "indicator": sha1,
-                        "type": "SSLCertFingerprint",
+                        "type": CERTIFICATE_OTX_TYPE,
+                        "kind": "certificate",
                         "reason": (
                             f"TLS certificate shared across {shared} domains, so it "
                             "identifies the host rather than this actor"
@@ -1276,6 +1285,7 @@ def build_pulse(investigations: list[dict], title: str, description: str,
                                 "ipv4" if name.replace(".", "").isdigit() else "domain"
                             )
                             or "domain",
+                    **({"kind": entry["kind"]} if entry.get("kind") else {}),
                     "engine_risk_level": "analyst-included",
                     # Both claims are kept. The caveat is what the engine
                     # objected to and the reason is why the analyst overruled
@@ -1316,6 +1326,16 @@ def build_pulse(investigations: list[dict], title: str, description: str,
         logger.warning(
             f"Description names {len(leaked)} indicator-shaped string(s) that are "
             f"not published IOCs; OTX will extract them: {leaked[:6]}"
+        )
+
+    # A thumbprint published as a file hash reads as a sample unless the prose
+    # says otherwise, and a reader then sandboxes it and finds nothing.
+    thumbprints = sum(1 for entry in included if entry.get("kind") == "certificate")
+    if thumbprints and not re.search(r"certificate|thumbprint", description, re.IGNORECASE):
+        logger.warning(
+            f"{thumbprints} certificate thumbprint(s) publish as {CERTIFICATE_OTX_TYPE}. "
+            "Say in the description that they are certificates, or a reader will "
+            "treat them as file samples."
         )
 
     # Checked at build time, with the overshoot named, so an over-long
@@ -1524,7 +1544,8 @@ if __name__ == "__main__":
     print(f"upload this : {clean_path}")
     print(f"TLP         : {built['TLP']}  ({built['_tlp_reason']})")
     for i in built["_included_detail"]:
-        print(f"    {i['type']:<10} {i['indicator']}  (engine: {i['engine_risk_level']})")
+        kind = "  [certificate]" if i.get("kind") == "certificate" else ""
+        print(f"    {i['type']:<10} {i['indicator']}  (engine: {i['engine_risk_level']}){kind}")
 
     # Stated at the point of use, not buried in the audit file. The override
     # stands either way; the analyst simply reads what it cost.

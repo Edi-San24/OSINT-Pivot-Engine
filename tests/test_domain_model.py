@@ -795,9 +795,10 @@ def check_override_fidelity() -> None:
                          include={fingerprint: "the certificate is the pivot"})
     entry = next((e for e in forced["_included_detail"]
                   if e["indicator"] == fingerprint), None)
-    check(entry is not None and entry.get("type") == "SSLCertFingerprint",
-          f"a reinstated fingerprint keeps its own type -> "
-          f"{(entry or {}).get('type')}")
+    check(entry is not None and entry.get("type") == "FileHash-SHA1"
+          and entry.get("kind") == "certificate",
+          f"a reinstated fingerprint keeps its own type and stays a certificate -> "
+          f"{(entry or {}).get('type')}, {(entry or {}).get('kind')}")
 
     # An address still reinstates as an address.
     dropped_address = {
