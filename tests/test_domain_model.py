@@ -2213,6 +2213,45 @@ def check_netblock_clustering() -> None:
           "a non-IPv4 host is skipped rather than raising")
 
 
+def check_cloud_is_not_cdn() -> None:
+    """
+    The CDN modifier reads the address, not the provider's name.
+
+    A cloud provider names a rented single-tenant server and its shared edge
+    the same way, so a name match scores every server it sells as a CDN.
+    """
+    print("\n-- a cloud server is not a CDN edge --")
+    from core.context import detect_infrastructure_type
+
+    def pivot(ip, asn, owner, kind="ipv4"):
+        return {"indicator": ip, "type": kind, "results": {
+            "censys": {"autonomous_system": asn},
+            "virustotal": {"owner": owner}}}
+
+    servers = {
+        "52.0.0.1": ("AMAZON-AES - Amazon.com, Inc.", "Amazon.com, Inc."),
+        "172.105.0.1": ("AKAMAI-AS - Akamai Connected Cloud", "Akamai Connected Cloud"),
+        "34.0.0.1": ("GOOGLE-CLOUD-PLATFORM", "Google LLC"),
+    }
+    for ip, (asn, owner) in servers.items():
+        context = detect_infrastructure_type(pivot(ip, asn, owner))
+        check(not context["is_cdn"] and context["confidence_modifier"] == 0.0,
+              f"{owner} server {ip} keeps its score -> {context['infrastructure_type']}, "
+              f"{context['confidence_modifier']}")
+
+    edges = {"104.16.0.1": "CLOUDFLARENET", "151.101.0.1": "FASTLY",
+             "13.32.1.1": "AMAZON-02 - Amazon.com, Inc."}
+    for ip, asn in edges.items():
+        context = detect_infrastructure_type(pivot(ip, asn, asn))
+        check(context["is_cdn"] and context["confidence_modifier"] == -0.6,
+              f"shared edge {ip} is still a CDN -> {context['infrastructure_type']}")
+
+    # A domain is one tenant's name wherever it is served from.
+    context = detect_infrastructure_type(pivot("cdn-fronted.example", "CLOUDFLARENET",
+                                               "Cloudflare", kind="domain"))
+    check(not context["is_cdn"], "a domain is never classed as a CDN edge")
+
+
 def check_seed_formats() -> None:
     """
     A seed the analyst can actually paste has to resolve to a type.
@@ -2574,6 +2613,7 @@ def main() -> int:
     check_stix_bundle_contract()
     check_urlhaus_answer_shapes()
     check_netblock_clustering()
+    check_cloud_is_not_cdn()
     check_actor_designators()
     check_crowdstrike_designators()
     check_malware_families()

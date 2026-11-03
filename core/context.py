@@ -4,6 +4,8 @@
 
 import logging
 
+from core.risk import is_cdn_edge
+
 logger = logging.getLogger(__name__)
 
 # Known infrastructure patterns that reduce confidence
@@ -11,11 +13,6 @@ TOR_EXIT_PATTERNS = [
     "tor-exit", "torservers", "tor relay",
     "for-privacy.net", "torproject.org"
 ]
-
-CDN_ASNS = {
-    "cloudflare", "akamai", "fastly", "amazon",
-    "google", "microsoft", "cdnetworks", "limelight"
-}
 
 SHARED_HOSTING_PATTERNS = [
     "plesk", "cpanel", "whm", "shared hosting",
@@ -57,19 +54,16 @@ def detect_infrastructure_type(pivot_result: dict) -> dict:
                 logger.info("Tor exit node detected. Applying confidence modifier.")
                 break
 
-    # Check ASN for CDN providers
+    # Matched on the address, not the provider name. A provider that also sells
+    # cloud servers names its single-tenant machines and its shared edge alike.
+    if pivot_result.get("type") == "ipv4" and is_cdn_edge(pivot_result.get("indicator", "")):
+        context["is_cdn"] = True
+        context["infrastructure_type"] = "cdn"
+        context["confidence_modifier"] = -0.6
+        logger.info("CDN edge address detected. Applying confidence modifier.")
+
     censys = results.get("censys", {})
     asn = censys.get("autonomous_system", "").lower()
-    shodan = results.get("shodan", {})
-    org = shodan.get("organization", "").lower()
-
-    for cdn in CDN_ASNS:
-        if cdn in asn or cdn in org:
-            context["is_cdn"] = True
-            context["infrastructure_type"] = "cdn"
-            context["confidence_modifier"] = -0.6
-            logger.info("CDN infrastructure detected. Applying confidence modifier.")
-            break
 
     # Check for shared hosting patterns
     vt = results.get("virustotal", {})
