@@ -829,6 +829,34 @@ def check_override_fidelity() -> None:
           f"an indicator the run never touched is marked unassessed -> "
           f"{(entry or {}).get('assessed')}")
 
+    # A URL path is case-sensitive, so a folded one matches no real request.
+    path = "https://files.example.net/CaseMatters01.php"
+    cased = build_pulse([dropped_address], title="t", description="d",
+                        include={path: "delivery path from the feed"})
+    check(path in [i["indicator"] for i in cased["indicators"]],
+          f"a forced URL keeps its spelling -> "
+          f"{[i['indicator'] for i in cased['indicators'] if 'casematters' in i['indicator'].lower()]}")
+
+    print("\n-- a cloud-range note from OTX is not a refusal --")
+    cloud = {
+        "indicator": "52.0.0.1", "risk_level": "HIGH",
+        "visited": ["52.0.0.1", "52.0.0.2"],
+        "full_results": [
+            {"indicator": "52.0.0.1", "type": "ipv4", "results": {
+                "threatfox": {"found": True, "max_confidence": 75},
+                "otx": {"otx_validation": ["In cloud provider range: provider=AWS"]}}},
+            {"indicator": "52.0.0.2", "type": "ipv4", "results": {
+                "threatfox": {"found": True, "max_confidence": 75},
+                "otx": {"otx_validation": ["In cloud provider range: provider=AWS",
+                                           "contained in whitelisted prefix"]}}},
+        ],
+    }
+    kept, dropped = select_indicators([cloud])
+    check("52.0.0.1" in [e["indicator"] for e in kept],
+          "an address OTX only annotates as cloud-hosted is still published")
+    check("52.0.0.2" in [e["indicator"] for e in dropped],
+          "one in a whitelisted prefix is still withheld")
+
     print("\n-- exclusions state a reason from the command line too --")
 
     parsed = parse_exclusions("""

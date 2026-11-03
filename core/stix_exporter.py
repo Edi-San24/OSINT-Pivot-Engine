@@ -410,6 +410,9 @@ def pivot_for(investigation: dict, name: str) -> dict:
     )
 
 
+OTX_ANNOTATIONS = ("in cloud provider range",)
+
+
 def _otx_rejection(pivot: dict) -> str:
     """
     Why OTX would refuse this indicator, or "" when it would accept it.
@@ -418,7 +421,12 @@ def _otx_rejection(pivot: dict) -> str:
     an OTX timeout is not grounds to drop an indicator the other sources back.
     """
     otx = (pivot.get("results") or {}).get("otx") or {}
-    return "; ".join(otx.get("otx_validation") or [])
+    # OTX annotates every address in a cloud provider's ranges and stores it
+    # all the same. Only the other validations, such as a whitelisted prefix,
+    # mean it will be dropped.
+    refusals = [message for message in otx.get("otx_validation") or []
+                if not str(message).lower().startswith(OTX_ANNOTATIONS)]
+    return "; ".join(refusals)
 
 
 def _co_hosted_tenants(pivot: dict, investigated_domains: set[str]) -> list[str] | None:
@@ -1264,6 +1272,9 @@ def build_pulse(investigations: list[dict], title: str, description: str,
     # blocking it needs care.
     # Keyed lowercase for matching, with the analyst's reason carried alongside.
     forced = {name.lower(): reason for name, reason in include.items()}
+    # Matching is case-insensitive, publishing is not: a URL path is
+    # case-sensitive, and its folded form matches no real request.
+    spelled_forced = {name.lower(): name for name in include}
     if forced:
         published = {e["indicator"].lower() for e in included}
         remaining, reinstated = [], set()
@@ -1272,7 +1283,7 @@ def build_pulse(investigations: list[dict], title: str, description: str,
             if name in forced and name not in published:
                 reinstated.add(name)
                 included.append({
-                    "indicator": entry["indicator"],
+                    "indicator": spelled_forced.get(name, entry["indicator"]),
                     # The type the selector assigned, where it recorded one.
                     # Re-deriving it from the string cannot distinguish a
                     # certificate fingerprint from a file SHA-1, since both are
@@ -1305,7 +1316,7 @@ def build_pulse(investigations: list[dict], title: str, description: str,
         # chain never pivoted was never a candidate. Carries a caveat because the
         # engine has no assessment of it, so the claim is the analyst's.
         for name in sorted(set(forced) - published - reinstated):
-            detected = detect_type(name) or {}
+            detected = detect_type(spelled_forced[name]) or {}
             kind = detected.get("type", "domain")
             included.append({
                 "indicator": detected.get("indicator", name),
