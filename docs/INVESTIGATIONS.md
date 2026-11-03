@@ -2,11 +2,15 @@
 
 Some featured investigations conducted by the Pivot Engine
 
+Each pulse carries a TLP 2.0 label. TLP:CLEAR is what OTX still displays as
+white. TLP:GREEN means within the OTX community: read and use the indicators,
+but do not repost them to public channels.
+
 ---
 
 ## VShell: eight /27 blocks filled end to end at one provider
 
-[Pulse](https://otx.alienvault.com/pulse/6aaa81ca5b399ed79277b44b) · 16 September 2026 · 8 CIDR blocks
+[Pulse](https://otx.alienvault.com/pulse/6aaa81ca5b399ed79277b44b) · 16 September 2026 · 8 CIDR blocks · TLP:CLEAR
 
 **Target.** A VShell command and control fleet at a single provider, reached by
 querying the family rather than any one address, so the unit of analysis was
@@ -43,7 +47,7 @@ making the claim ambiguous.
 
 ## Grandoreiro against Mexico: cloud C2 and rented delivery hosts
 
-[Pulse](https://otx.alienvault.com/pulse/6aab5ace3c70403848af5abc) · 17 September 2026 · 7 indicators
+[Pulse](https://otx.alienvault.com/pulse/6aab5ace3c70403848af5abc) · 17 September 2026 · 7 indicators · TLP:CLEAR
 
 **Target.** Grandoreiro infrastructure that a feed tagged as targeting Mexico.
 
@@ -79,7 +83,7 @@ that holds now rather than indefinitely because cloud addresses recycle.
 
 ## Mispadu (Malteiro, G1026): Latin America banking trojan sample set
 
-[Pulse](https://otx.alienvault.com/pulse/6a9c931eaaa920f1301b969a) · 5 September 2026 · 5 hashes
+[Pulse](https://otx.alienvault.com/pulse/6a9c931eaaa920f1301b969a) · 5 September 2026 · 5 hashes · TLP:CLEAR
 
 **Target.** Mispadu, the banking trojan built and operated by Malteiro, seeded
 by nothing more than the group name.
@@ -111,8 +115,9 @@ claim more care than was taken.
 
 ## German public procurement: FileFix lures, and what happened next
 
-[First pulse](https://otx.alienvault.com/pulse/6ac7e464e441c5b8f83f0700) · 8 October 2026 · 18 indicators
-[Follow-up](https://otx.alienvault.com/pulse/6acd68a608b12071ccd4e2b8) · 12 October 2026 · 7 indicators
+[First pulse](https://otx.alienvault.com/pulse/6ac7e464e441c5b8f83f0700) · 8 October 2026 · 18 indicators · TLP:GREEN
+
+[Follow-up](https://otx.alienvault.com/pulse/6acd68a608b12071ccd4e2b8) · 12 October 2026 · 7 indicators · TLP:CLEAR
 
 **Target.** Three URLs reported to a feed in one morning, all German domains
 serving the same path.
