@@ -2487,6 +2487,73 @@ def check_attack_bundle_refresh() -> None:
         mitre_mod.requests.get = saved
 
 
+def check_otx_adversary_tags() -> None:
+    """
+    Adversary names OTX authors tag on an actor's reporting are counted by
+    author and resolved against ATT&CK beside the actor, never as it, and a
+    pulse count the search does not return stays unknown.
+    """
+    import tempfile
+    import types
+    import connectors.otx as otx_mod
+
+    print("\n-- OTX adversary tags are reported beside the actor, not as it --")
+    pulses = [
+        {"name": "Famous Chollima deploys a new RAT", "author_name": "a", "adversary": "WageMole"},
+        {"name": "Famous Chollima job lures", "author_name": "b", "adversary": "wagemole"},
+        {"name": "Famous Chollima and Lazarus overlap", "author_name": "a",
+         "adversary": "Lazarus Group"},
+        {"name": "Famous Chollima again", "author_name": "c", "adversary": "Famous Chollima"},
+        {"name": "Famous Chollima once more", "author_name": "e", "adversary": "Famous_chollima"},
+        {"name": "Unrelated pulse", "author_name": "d", "adversary": "Kimsuky"},
+    ]
+    saved = otx_mod.get_with_retry
+    otx_mod.get_with_retry = lambda *a, **k: types.SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: {"results": pulses, "count": len(pulses)})
+    try:
+        otx = otx_mod.OTXConnector()
+        otx._username = None
+        searched = otx.search_pulses("Famous Chollima")
+    finally:
+        otx_mod.get_with_retry = saved
+
+    tags = {t["name"]: (t["authors"], t["pulses"]) for t in searched.get("adversary_tags") or []}
+    check(tags.get("WageMole") == (2, 2) and tags.get("Famous Chollima") == (2, 2) and len(tags) == 3,
+          f"spellings differing in case or separators are one tag, counted by author -> {tags}")
+    check("Kimsuky" not in tags, "tags come only from pulses about the name")
+    check(all(p["indicator_count"] is None for p in searched["pulses"]),
+          "a count the search does not return is unknown, not zero")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        executor = PivotExecutor.__new__(PivotExecutor)
+        executor.mitre = _mini_mitre(os.path.join(tmp, "attack.json"))
+        executor.otx = types.SimpleNamespace(search_pulses=lambda name: searched)
+        executor.ahmia = types.SimpleNamespace(search=lambda name: {"results": []})
+        executor.bazaar = types.SimpleNamespace(query_signature=lambda name: {"found": False})
+        pivot = executor.pivot_group("FAMOUS CHOLLIMA")
+        known = executor.pivot_group("Cozy Bear")
+
+    associated = pivot["results"].get("mitre_associated") or []
+    check([a["name"] for a in associated] == ["WageMole", "Lazarus Group"],
+          f"the actor's own name is not listed as another -> {[a['name'] for a in associated]}")
+    check(associated[1].get("group_id") == "G0032" and "group_id" not in associated[0],
+          "a tag is resolved to ATT&CK only where the name exactly is a group")
+    check(not pivot["results"]["mitre"]["found"],
+          "the actor itself stays unmatched in ATT&CK")
+    check("mitre_associated" not in known["results"],
+          "an actor ATT&CK carries needs no associated names")
+
+    finding = next((f for f in extract_findings(pivot) if "also tag" in f), "")
+    check("ATT&CK G0032 Lazarus Group" in finding and "not that the actors are the same" in finding,
+          f"the finding names the overlap and says what it is not -> {finding[:90]}")
+
+    scorer = ConfidenceScorer()
+    without = {**pivot, "results": {k: v for k, v in pivot["results"].items()
+                                    if k != "mitre_associated"}}
+    check(scorer.score_threat_group(pivot) == scorer.score_threat_group(without),
+          "associated names leave the actor's score unchanged")
+
+
 def check_seed_formats() -> None:
     """
     A seed the analyst can actually paste has to resolve to a type.
@@ -2852,6 +2919,7 @@ def main() -> int:
     check_summary_refusal()
     check_attack_name_resolution()
     check_attack_bundle_refresh()
+    check_otx_adversary_tags()
     check_actor_designators()
     check_crowdstrike_designators()
     check_malware_families()

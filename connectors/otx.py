@@ -17,6 +17,11 @@ BASE_URL = "https://otx.alienvault.com/api/v1"
 # Sentinel so "lookup failed, cached None" stays distinguishable from
 # "not looked up yet", which would otherwise retry on every call.
 _UNSET = object()
+
+
+def actor_key(name: str) -> str:
+    """An actor name for comparison: case, spaces, underscores and hyphens ignored."""
+    return re.sub(r"[\s_\-]+", " ", name or "").strip().lower()
  
  
 class OTXConnector:
@@ -218,14 +223,28 @@ class OTXConnector:
             )
 
             authors, malware, adversaries, tags = set(), set(), set(), set()
+            # Per adversary name, the authors and pulses that apply it. Counted by
+            # author, since one author tagging ten pulses is one opinion.
+            tagged = {}
             for p in pulses:
                 author = self._pulse_author(p)
                 if author != "unknown":
                     authors.add(author)
                 malware.update(p.get("malware_families", []) or [])
-                if p.get("adversary"):
-                    adversaries.add(p["adversary"])
+                adversary = (p.get("adversary") or "").strip()
+                if adversary:
+                    adversaries.add(adversary)
+                    entry = tagged.setdefault(actor_key(adversary),
+                                              {"name": adversary, "authors": set(), "pulses": 0})
+                    entry["pulses"] += 1
+                    if author != "unknown":
+                        entry["authors"].add(author)
                 tags.update(p.get("tags", []) or [])
+            adversary_tags = sorted(
+                ({"name": t["name"], "authors": len(t["authors"]), "pulses": t["pulses"]}
+                 for t in tagged.values()),
+                key=lambda t: (-t["authors"], -t["pulses"], t["name"].lower()),
+            )
 
             return {
                 "indicator": query,
@@ -243,6 +262,7 @@ class OTXConnector:
                 "distinct_authors": len(authors),
                 "malware_families": sorted(malware)[:10],
                 "adversaries": sorted(adversaries)[:5],
+                "adversary_tags": adversary_tags[:10],
                 "tags": sorted(tags)[:15],
                 "pulses": [
                     {
@@ -253,7 +273,9 @@ class OTXConnector:
                         "author": p.get("author_name", "unknown"),
                         "created": p.get("created", "unknown"),
                         "modified": p.get("modified", "unknown"),
-                        "indicator_count": p.get("indicator_count", 0),
+                        # The search endpoint returns no count, so a missing one
+                        # stays unknown rather than reading as an empty pulse.
+                        "indicator_count": p.get("indicator_count"),
                         "tags": p.get("tags", []),
                     }
                     for p in pulses

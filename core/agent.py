@@ -802,6 +802,24 @@ def extract_findings(result: dict) -> list[str]:
             f"({', '.join((mitre.get('candidates') or [])[:5])}), so none was chosen."
         )
 
+    # Names OTX authors tag on pulses about this actor, resolved against ATT&CK.
+    # Reported beside the actor, never as it: two names on one pulse is overlap
+    # in reporting, not identity.
+    associated = results.get("mitre_associated") or []
+    if associated:
+        parts = []
+        for tag in associated[:5]:
+            authors = tag.get("authors", 0)
+            part = f"{tag['name']} ({authors} author{'s' if authors != 1 else ''}"
+            if tag.get("group_id"):
+                part += f", ATT&CK {tag['group_id']} {tag['group_name']}"
+            parts.append(part + ")")
+        findings.append(
+            f"{indicator}: OTX authors also tag this reporting with "
+            f"{'; '.join(parts)}. Shared tags record overlap in reporting, "
+            "not that the actors are the same."
+        )
+
     # SpiderFoot — identity footprint
     spiderfoot = results.get("spiderfoot", {})
     if spiderfoot.get("finding_count"):

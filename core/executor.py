@@ -40,7 +40,7 @@ from connectors.bazaar import MalwareBazaarConnector
 from connectors.spiderfoot import SpiderFootConnector
 from connectors.urlhaus import URLhausConnector
 from connectors.threatfox import ThreatFoxConnector
-from connectors.otx import OTXConnector
+from connectors.otx import OTXConnector, actor_key
 from connectors.cve import CVEConnector, normalize as normalize_cve
  
 logging.basicConfig(
@@ -72,6 +72,9 @@ CHAINABLE_TOOLS = {
 
 # Caps the MalwareBazaar lookups fired per threat group pivot.
 MAX_TOOLING_LOOKUPS = 5
+
+# Caps the other actor names reported from OTX tags on a group's reporting.
+MAX_ASSOCIATED_ACTORS = 5
 
 
 # Co-tenant count above which an address reads as shared hosting, where a
@@ -509,6 +512,21 @@ class PivotExecutor:
 
         return chainable[:MAX_TOOLING_LOOKUPS]
 
+    def _associated_groups(self, group_name: str, otx_search) -> list[dict]:
+        """
+        The other adversary names OTX pulses about this actor carry, most
+        authors first, each with its ATT&CK group where the name exactly is one.
+        """
+        if not isinstance(otx_search, dict):
+            return []
+        own = actor_key(group_name)
+        associated = []
+        for tag in otx_search.get("adversary_tags") or []:
+            if actor_key(tag.get("name", "")) == own:
+                continue
+            associated.append({**tag, **(self.mitre.group_ref(tag["name"]) or {})})
+        return associated[:MAX_ASSOCIATED_ACTORS]
+
     def pivot_group(self, group_name: str, deep: bool = False) -> dict:
         """
         Looks up a threat group in MITRE ATT&CK, then chains its malware into
@@ -530,6 +548,13 @@ class PivotExecutor:
             }, timeout=GROUP_DISCOVERY_TIMEOUT)
             results.update(discovery)
             mitre_result = results.get("mitre", {})
+
+            # Kept apart from "mitre", so another group's ATT&CK coverage never
+            # scores or chains as this one's.
+            if not mitre_result.get("found") and "error" not in mitre_result:
+                results["mitre_associated"] = self._associated_groups(
+                    group_name, results.get("otx_search")
+                )
 
             chainable = self._chainable_tooling(mitre_result)
 
