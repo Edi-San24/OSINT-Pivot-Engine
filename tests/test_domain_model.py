@@ -2591,6 +2591,156 @@ def check_group_score_takes_stronger_reading() -> None:
           "a group outside ATT&CK is scored from community reporting as before")
 
 
+def _synthetic_domain_models(directory: str) -> str:
+    """A small classifier and familiarity model under the scorer's file names."""
+    import joblib
+    import numpy as np
+    import pandas as pd
+    from sklearn.ensemble import GradientBoostingClassifier
+    from core.familiarity import fit_familiarity
+    from core.scorer import DOMAIN_MODEL_TAG
+
+    rng = np.random.default_rng(7)
+    n = 200
+    X = pd.DataFrame({
+        "dns_record_count": rng.integers(1, 12, n),
+        "domain_age_days": rng.integers(1, 5000, n),
+        "has_wildcard_dns": rng.integers(0, 2, n),
+        "nameserver_count": rng.integers(1, 5, n),
+        "has_mx": rng.integers(0, 2, n),
+        "otx_pulse_count": rng.integers(0, 4, n),
+        "domain_age_known": np.ones(n, dtype=int),
+    })
+    y = ((X["domain_age_days"] < 400) | (X["nameserver_count"] < 2)).astype(int)
+    suffix = f"_{DOMAIN_MODEL_TAG}_domain"
+    joblib.dump(GradientBoostingClassifier(random_state=1).fit(X, y),
+                os.path.join(directory, f"gradient_boosting{suffix}.joblib"))
+    joblib.dump(fit_familiarity(X), os.path.join(directory, f"familiarity{suffix}.joblib"))
+    return suffix
+
+
+def _scorer_from(directory: str) -> ConfidenceScorer:
+    import core.scorer as scorer_mod
+
+    saved = scorer_mod.MODEL_DIR
+    scorer_mod.MODEL_DIR = directory
+    try:
+        return ConfidenceScorer()
+    finally:
+        scorer_mod.MODEL_DIR = saved
+
+
+def _fixture_domain() -> dict:
+    """A fixture domain whose features carry data, so the model actually scores it."""
+    from core.features import extract_features
+    return next(e for e in json.load(open(FIXTURE, encoding="utf-8"))
+                if e["type"] == "domain" and extract_features(e).get("nameserver_count"))
+
+
+def check_domain_models_load_independently() -> None:
+    """
+    The classifier and the familiarity model load on their own. Losing the
+    familiarity model costs the note and never the score, and a damaged file
+    falls back rather than crashing.
+
+    They loaded as a pair, so a missing companion file switched the domain
+    model off and every domain fell back to evidence scoring without a warning.
+    """
+    import copy
+    import tempfile
+
+    print("\n-- the domain model and its familiarity model load independently --")
+    pivot = _fixture_domain()
+    with tempfile.TemporaryDirectory() as tmp:
+        suffix = _synthetic_domain_models(tmp)
+        both = _scorer_from(tmp)
+        full = both.score_any(copy.deepcopy(pivot))
+        check(both.domain_gb is not None and both.domain_familiarity is not None
+              and full.get("unfamiliar") in (True, False),
+              f"both load, and a scored domain gets a familiarity answer -> {full.get('unfamiliar')}")
+
+        os.remove(os.path.join(tmp, f"familiarity{suffix}.joblib"))
+        alone = _scorer_from(tmp)
+        without = alone.score_any(copy.deepcopy(pivot))
+        check(alone.domain_gb is not None and without.get("unfamiliar") is None,
+              "with no familiarity model the classifier still loads, and familiarity reads unknown")
+        check((without["confidence_score"], without["risk_level"])
+              == (full["confidence_score"], full["risk_level"]),
+              f"and the score is unchanged -> {without['confidence_score']} {without['risk_level']}")
+
+        with open(os.path.join(tmp, f"familiarity{suffix}.joblib"), "wb") as f:
+            f.write(b"not a model")
+        damaged = _scorer_from(tmp)
+        check(damaged.domain_gb is not None
+              and damaged.score_any(copy.deepcopy(pivot)).get("unfamiliar") is None,
+              "a damaged familiarity file is skipped, not fatal")
+
+        with open(os.path.join(tmp, f"gradient_boosting{suffix}.joblib"), "wb") as f:
+            f.write(b"not a model")
+        broken = _scorer_from(tmp)
+        fallback = broken.score_any(copy.deepcopy(pivot))
+        check(broken.domain_gb is None and "error" not in fallback and fallback.get("risk_level"),
+              f"a damaged classifier falls back to evidence scoring -> {fallback.get('risk_level')}")
+
+
+def check_unfamiliar_is_a_note() -> None:
+    """
+    A domain unlike the training data gets a finding saying so, and never a
+    different score.
+    """
+    import copy
+    import tempfile
+    import types
+    import numpy as np
+    import pandas as pd
+    import core.agent as agent
+    from core.familiarity import fit_familiarity
+
+    print("\n-- an unfamiliar domain gets a note, never a different score --")
+    rng = np.random.default_rng(3)
+    rows = pd.DataFrame({"a": rng.normal(0, 1, 400), "b": rng.normal(0, 1, 400)})
+    familiarity = fit_familiarity(rows)
+    check(familiarity.predict(pd.DataFrame({"a": [0.0], "b": [0.0]}))[0] == 1
+          and familiarity.predict(pd.DataFrame({"a": [9.0], "b": [-9.0]}))[0] == -1,
+          "the familiarity model passes the middle of its data and marks the far edge")
+    share = float((familiarity.predict(rows) == -1).mean())
+    check(share <= 0.05, f"and marks only a small share of its own training rows -> {share:.1%}")
+
+    pivot = _fixture_domain()
+    with tempfile.TemporaryDirectory() as tmp:
+        _synthetic_domain_models(tmp)
+        scorer = _scorer_from(tmp)
+        scorer.domain_familiarity = types.SimpleNamespace(
+            predict=lambda X: np.array([-1]), feature_names_in_=scorer.domain_gb.feature_names_in_)
+        odd = scorer.score_any(copy.deepcopy(pivot))
+        scorer.domain_familiarity = None
+        plain = scorer.score_any(copy.deepcopy(pivot))
+    check(odd.get("unfamiliar") is True and plain.get("unfamiliar") is None,
+          "the flag is reported when the input is unusual")
+    check((odd["confidence_score"], odd["risk_level"]) == (plain["confidence_score"], plain["risk_level"]),
+          "and the score and level are the same either way")
+
+    def findings(flag):
+        state = {"seed": pivot["indicator"], "current_seed": pivot["indicator"],
+                 "indicator_type": "domain", "pivot_results": [copy.deepcopy(pivot)],
+                 "pivot_queue": [], "visited": [pivot["indicator"]], "findings": [],
+                 "should_continue": False, "pivot_count": 1, "insufficient_data": False,
+                 "infrastructure_type": "unknown", "context_note": "", "summary": "",
+                 "deep": False, "relevance_level": "none", "summary_failed": False,
+                 "risk_thresholds": [0.7, 0.4]}
+        saved = agent.scorer
+        agent.scorer = types.SimpleNamespace(score_any=lambda p: {
+            "confidence_score": 0.8, "risk_level": "HIGH", "thresholds": [0.7, 0.4],
+            "unfamiliar": flag})
+        try:
+            return [f for f in agent.apply_context(state)["findings"] if "unlike the domains" in f]
+        finally:
+            agent.scorer = saved
+
+    check(len(findings(True)) == 1 and not findings(None) and not findings(False),
+          "the investigation gains the caution finding only when the domain is unfamiliar")
+
+
 def check_seed_formats() -> None:
     """
     A seed the analyst can actually paste has to resolve to a type.
@@ -2958,6 +3108,8 @@ def main() -> int:
     check_attack_bundle_refresh()
     check_otx_adversary_tags()
     check_group_score_takes_stronger_reading()
+    check_domain_models_load_independently()
+    check_unfamiliar_is_a_note()
     check_actor_designators()
     check_crowdstrike_designators()
     check_malware_families()

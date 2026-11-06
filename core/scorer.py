@@ -1,8 +1,10 @@
 # core/scorer.py
 # Loads trained models and scores indicators at runtime.
-# Returns a confidence score and anomaly flag for each pivot result.
+# Returns a confidence score for each pivot result, and for a domain whether its
+# features are unlike the model's training data.
 
 
+import os
 import joblib
 import numpy as np
 import logging
@@ -59,9 +61,9 @@ LEVEL_RANK = {"UNKNOWN": -1, "LOW": 0, "MEDIUM": 1, "HIGH": 2}
 class ConfidenceScorer:
     """
     Loads trained models and scores pivot results.
-    Returns a confidence score between 0 and 1
-    and an anomaly flag from Isolation Forest.
- 
+    Returns a confidence score between 0 and 1. A domain scored by the model
+    also says whether its features are unlike the model's training data.
+
     Use score_any() as the single entry point — it routes
     to the correct scoring method based on indicator type.
     """
@@ -74,20 +76,25 @@ class ConfidenceScorer:
         # The only model left. Absent on a clone, since domain models are
         # gitignored, and domains then fall back to evidence scoring rather than
         # to the retired IP model.
-        self.domain_gb, self.domain_iso = self._load_pair(f"_{DOMAIN_MODEL_TAG}_domain")
+        suffix = f"_{DOMAIN_MODEL_TAG}_domain"
+        self.domain_gb = self._load_model(f"gradient_boosting{suffix}.joblib")
         if self.domain_gb is None:
             logger.info("No domain model; domains are scored from feed evidence.")
+        # Loaded on its own, so losing it costs the familiarity note and never
+        # the score.
+        self.domain_familiarity = self._load_model(f"familiarity{suffix}.joblib")
 
     @staticmethod
-    def _load_pair(suffix: str) -> tuple:
-        """Loads a gradient boosting and isolation forest pair, (None, None) if absent."""
+    def _load_model(filename: str):
+        """A model from MODEL_DIR, or None when it is absent or cannot be read."""
+        path = os.path.join(MODEL_DIR, filename)
         try:
-            return (
-                joblib.load(f"{MODEL_DIR}/gradient_boosting{suffix}.joblib"),
-                joblib.load(f"{MODEL_DIR}/isolation_forest{suffix}.joblib"),
-            )
+            return joblib.load(path)
         except FileNotFoundError:
-            return None, None
+            return None
+        except Exception as e:
+            logger.error(f"Could not load {filename}, continuing without it: {str(e)[:120]}")
+            return None
 
     def _risk_fields(self, score: float, thresholds: tuple = DEFAULT_THRESHOLDS) -> dict:
         """
@@ -112,8 +119,8 @@ class ConfidenceScorer:
         else, including domains on a checkout without one, goes to
         score_from_evidence.
         """
-        gb, iso = self.domain_gb, self.domain_iso
-        if not gb or not iso:
+        gb = self.domain_gb
+        if not gb:
             return {"error": "No domain model. Train one with core/trainer.py."}
 
         features = extract_features(pivot_result)
@@ -138,7 +145,6 @@ class ConfidenceScorer:
         if not any(carries_data(column) for column in trained):
             return {
                 "confidence_score": 0.0,
-                "is_anomaly": False,
                 "risk_level": "UNKNOWN",
                 "model": f"domain_{DOMAIN_MODEL_TAG}",
                 "note": "No source returned data for this indicator.",
@@ -153,7 +159,7 @@ class ConfidenceScorer:
             return row.reindex(columns=list(model.feature_names_in_), fill_value=0).fillna(0)
 
         confidence_score = gb.predict_proba(matrix(gb))[0][1]
-        is_anomaly = iso.predict(matrix(iso))[0] == -1
+        unfamiliar = self._unfamiliar(matrix)
 
         # Feed evidence floors the model, because the model is structurally
         # blind to a compromised legitimate site: registered years ago, real
@@ -182,6 +188,7 @@ class ConfidenceScorer:
             # floors the model most often on a compromised legitimate site,
             # which is exactly the case worth seeing a second opinion on.
             evidence.update(self._licensed_opinion(pivot_result))
+            evidence["unfamiliar"] = unfamiliar
             return evidence
 
         # The measured meaning of the band, so the score reads as the model's
@@ -197,12 +204,26 @@ class ConfidenceScorer:
 
         return {
             "confidence_score": round(float(confidence_score), 4),
-            "is_anomaly": is_anomaly,
+            "unfamiliar": unfamiliar,
             "model": f"domain_{DOMAIN_MODEL_TAG}",
             **fields,
             "features_used": features,
             **self._licensed_opinion(pivot_result),
         }
+
+    def _unfamiliar(self, matrix) -> bool | None:
+        """
+        Whether a domain's features are unlike the model's training data, where
+        the model is wrong more often. None when nothing could check, so an
+        unchecked domain never reads as a familiar one. Never changes the score.
+        """
+        if self.domain_familiarity is None:
+            return None
+        try:
+            return bool(self.domain_familiarity.predict(matrix(self.domain_familiarity))[0] == -1)
+        except Exception as e:
+            logger.warning(f"Familiarity check failed: {str(e)[:120]}")
+            return None
 
     def _licensed_opinion(self, pivot_result: dict) -> dict:
         """
@@ -264,7 +285,6 @@ class ConfidenceScorer:
             )
             return {
                 "confidence_score": 0.0,
-                "is_anomaly": False,
                 "risk_level": "UNKNOWN",
                 "is_hacktivist": is_hacktivist,
                 "note": (
@@ -297,7 +317,6 @@ class ConfidenceScorer:
 
         return {
             "confidence_score": score,
-            "is_anomaly": False,
             **self._risk_fields(score, thresholds=(0.5, 0.25)),
             "pulse_count": pulse_count,
             "distinct_authors": authors,
@@ -354,7 +373,6 @@ class ConfidenceScorer:
  
         coverage = {
             "confidence_score": round(confidence_score, 4),
-            "is_anomaly": False,
             **self._risk_fields(confidence_score, thresholds=(0.65, 0.4)),
             "technique_count": technique_count,
             "software_count": software_count,
@@ -394,7 +412,6 @@ class ConfidenceScorer:
         if not bazaar.get("found"):
             return {
                 "confidence_score": 0.0,
-                "is_anomaly": False,
                 "risk_level": "UNKNOWN",
                 "note": "Malware family not found in MalwareBazaar."
             }
@@ -421,7 +438,6 @@ class ConfidenceScorer:
  
         return {
             "confidence_score": round(confidence_score, 4),
-            "is_anomaly": False,
             **self._risk_fields(confidence_score, thresholds=(0.65, 0.4)),
             "sample_count": sample_count,
             "note": "Score derived from MalwareBazaar sample volume and malware category tags.",
@@ -461,7 +477,6 @@ class ConfidenceScorer:
         if not answered or unpublished:
             return {
                 "confidence_score": 0.0,
-                "is_anomaly": False,
                 "risk_level": "UNKNOWN",
                 "note": ("No source has a record of this CVE ID." if unpublished else
                          "No exploitation source answered, so priority cannot be judged."),
@@ -485,7 +500,6 @@ class ConfidenceScorer:
 
         return {
             "confidence_score": round(score, 4),
-            "is_anomaly": False,
             **self._risk_fields(score),
             "note": ("Exploitation priority from CISA KEV, CISA SSVC, feed tags and EPSS. "
                      "Severity is reported but does not raise it."),
@@ -552,7 +566,6 @@ class ConfidenceScorer:
                 if not ipaddress.ip_address(indicator).is_global:
                     return {
                         "confidence_score": 0.0,
-                        "is_anomaly": False,
                         "risk_level": "UNKNOWN",
                         "note": "Not a globally routable address (reserved, private or documentation space).",
                     }
@@ -578,7 +591,6 @@ class ConfidenceScorer:
         if not any(answered.values()):
             return {
                 "confidence_score": 0.0,
-                "is_anomaly": False,
                 "risk_level": "UNKNOWN",
                 "note": "No source answered for this address.",
             }
@@ -616,7 +628,6 @@ class ConfidenceScorer:
 
         return {
             "confidence_score": round(float(confidence_score), 4),
-            "is_anomaly": False,
             **self._risk_fields(confidence_score, thresholds=(0.5, 0.25)),
             "sources_answered": sorted(k for k, v in answered.items() if v),
             "malware_families": tf.get("malware_families") or [],
@@ -661,7 +672,6 @@ class ConfidenceScorer:
         if not vt_answered and not in_bazaar and not in_attack:
             return {
                 "confidence_score": 0.0,
-                "is_anomaly": False,
                 "risk_level": "UNKNOWN",
                 "note": "No VirusTotal, MalwareBazaar or ATT&CK record for this hash.",
             }
@@ -686,7 +696,6 @@ class ConfidenceScorer:
 
         return {
             "confidence_score": round(confidence_score, 4),
-            "is_anomaly": False,
             **self._risk_fields(confidence_score, thresholds=(0.65, 0.4)),
             "detections": detections,
             "malware_family": vt.get("malware_family") or bazaar.get("malware_family"),
@@ -704,7 +713,6 @@ class ConfidenceScorer:
         if spiderfoot.get("skipped"):
             return {
                 "confidence_score": 0.0,
-                "is_anomaly": False,
                 "risk_level": "UNKNOWN",
                 "note": "SpiderFoot skipped — re-run with --deep for identity enrichment.",
             }
@@ -715,7 +723,6 @@ class ConfidenceScorer:
         if scan_status == "TIMEOUT" or finding_count == 0:
             return {
                 "confidence_score": 0.0,
-                "is_anomaly": False,
                 "risk_level": "UNKNOWN",
                 "note": "SpiderFoot scan timed out or returned no findings.",
             }
@@ -725,7 +732,6 @@ class ConfidenceScorer:
  
         return {
             "confidence_score": round(confidence_score, 4),
-            "is_anomaly": False,
             **self._risk_fields(confidence_score, thresholds=(0.5, 0.3)),
             "finding_count": finding_count,
             "note": "Score derived from SpiderFoot identity footprint breadth.",

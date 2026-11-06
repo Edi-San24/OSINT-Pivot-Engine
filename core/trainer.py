@@ -1,7 +1,7 @@
 # core/trainer.py
 # ML model training and MLflow experiment tracking.
-# Trains Isolation Forest and Gradient Boosting models
-# on engineered features from pivot results.
+# Trains the gradient boosting domain model, and a familiarity model that marks
+# inputs unlike its training data.
 
 import os
 import joblib
@@ -9,12 +9,13 @@ import numpy as np
 import pandas as pd
 import mlflow
 import mlflow.sklearn
-from sklearn.ensemble import IsolationForest, GradientBoostingClassifier
+from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, roc_auc_score
 from sklearn.pipeline import Pipeline
 from core.features import build_feature_matrix, FEATURE_COLUMNS
+from core.familiarity import FAMILIARITY_CONTAMINATION, FAMILIARITY_TREES, fit_familiarity
 from config import MODEL_DIR, DATA_DIR
 
 # Model output directory — shared with core/scorer.py via config so training
@@ -57,7 +58,7 @@ def train_models(
     data_path: str | None = None,
 ):
     """
-    Trains Isolation Forest and Gradient Boosting models.
+    Trains the gradient boosting classifier and its familiarity model.
     Logs all experiments and registers models with MLflow.
 
     Domains are the only type with a model. Addresses, URLs and hashes are
@@ -101,22 +102,21 @@ def train_models(
 
     mlflow.set_experiment("osint-pivot-engine")
 
-    with mlflow.start_run(run_name=f"isolation_forest{suffix}"):
-        print("[*] Training Isolation Forest...")
+    with mlflow.start_run(run_name=f"familiarity{suffix}"):
+        print("[*] Training familiarity model...")
 
-        iso_forest = IsolationForest(
-            contamination=0.2,
-            random_state=42,
-            n_estimators=100
+        # Fitted on what the classifier is fitted on, since the question is
+        # whether an input resembles what the classifier learned from.
+        familiarity = fit_familiarity(X_train)
+
+        mlflow.log_param("contamination", FAMILIARITY_CONTAMINATION)
+        mlflow.log_param("n_estimators", FAMILIARITY_TREES)
+        joblib.dump(familiarity, f"{MODEL_DIR}/familiarity{suffix}.joblib")
+        mlflow.sklearn.log_model(
+            familiarity, name=f"familiarity{suffix}",
+            skops_trusted_types=["numpy.dtype"],
         )
-        iso_forest.fit(X_train)
-
-        mlflow.log_param("contamination", 0.2)
-        mlflow.log_param("n_estimators", 100)
-        mlflow.sklearn.log_model(iso_forest, name=f"isolation_forest{suffix}")
-
-        joblib.dump(iso_forest, f"{MODEL_DIR}/isolation_forest{suffix}.joblib")
-        print("[+] Isolation Forest trained and saved.")
+        print("[+] Familiarity model trained and saved.")
 
     with mlflow.start_run(run_name=f"gradient_boosting{suffix}"):
         print("[*] Training Gradient Boosting...")

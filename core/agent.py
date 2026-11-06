@@ -955,6 +955,15 @@ def apply_context(state: AgentState) -> AgentState:
     state["model_score"] = ml_score
     state["band_precision"] = raw.get("band_precision")
 
+    # Beside the score, never in it. The classifier is wrong more often on
+    # inputs unlike its training data, and the reader should know which those are.
+    if raw.get("unfamiliar"):
+        state["findings"].append(
+            f"{pivot_result.get('indicator', '')}: unlike the domains the model was "
+            "trained on, so read its model score with caution. Feed evidence, where "
+            "present, is unaffected."
+        )
+
     # The scorers say UNKNOWN when they had nothing, but only confidence_score
     # propagates from here, so that verdict was being dropped. Either way the
     # score below measures our visibility, not the indicator.
