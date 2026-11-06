@@ -2554,6 +2554,43 @@ def check_otx_adversary_tags() -> None:
           "associated names leave the actor's score unchanged")
 
 
+def check_group_score_takes_stronger_reading() -> None:
+    """
+    An ATT&CK group is scored on the stronger of its ATT&CK coverage and its
+    community reporting, each read on its own thresholds.
+
+    Coverage measures how thoroughly ATT&CK documents a group, so a widely
+    reported crew that ATT&CK lists with few tools read LOW on coverage alone.
+    """
+    print("\n-- an ATT&CK group keeps the stronger of its two readings --")
+    scorer = ConfidenceScorer()
+    thin = {"found": True, "technique_count": 46, "software_count": 1, "aliases": ["a", "b", "c"]}
+    deep = {"found": True, "technique_count": 78, "software_count": 23, "aliases": list("abcdefghi")}
+    reported = {"found": True, "pulse_count": 45, "distinct_authors": 10, "pulses": []}
+    quiet = {"found": False, "pulse_count": 0, "distinct_authors": 0, "pulses": []}
+
+    def group(mitre, otx):
+        return {"indicator": "x", "type": "threat_group",
+                "results": {"mitre": mitre, "otx_search": otx, "ahmia": {"results": []}}}
+
+    widely = scorer.score_threat_group(group(thin, reported))
+    check(widely["risk_level"] == "HIGH" and widely.get("coverage_level") == "LOW"
+          and widely["thresholds"] == [0.5, 0.25],
+          f"a thinly documented, widely reported group reads on community reporting -> "
+          f"{widely['risk_level']} {widely['confidence_score']}, coverage {widely.get('coverage_level')}")
+    alone = scorer.score_threat_group(group(thin, quiet))
+    check(alone["risk_level"] == "LOW" and alone["thresholds"] == [0.65, 0.4]
+          and "coverage_level" not in alone,
+          f"with no community reporting, coverage alone decides -> {alone['risk_level']}")
+    documented = scorer.score_threat_group(group(deep, reported))
+    check(documented["confidence_score"] == 1.0 and documented["thresholds"] == [0.65, 0.4],
+          f"a group coverage rates at least as high keeps its coverage score -> "
+          f"{documented['confidence_score']}")
+    outside = scorer.score_threat_group(group({"found": False}, reported))
+    check(outside["risk_level"] == "HIGH" and "Not in MITRE ATT&CK" in outside["note"],
+          "a group outside ATT&CK is scored from community reporting as before")
+
+
 def check_seed_formats() -> None:
     """
     A seed the analyst can actually paste has to resolve to a type.
@@ -2920,6 +2957,7 @@ def main() -> int:
     check_attack_name_resolution()
     check_attack_bundle_refresh()
     check_otx_adversary_tags()
+    check_group_score_takes_stronger_reading()
     check_actor_designators()
     check_crowdstrike_designators()
     check_malware_families()

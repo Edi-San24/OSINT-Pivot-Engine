@@ -52,6 +52,10 @@ except ImportError:
     licensed_model = None
 
 
+# Order of the levels, for choosing the stronger of two readings.
+LEVEL_RANK = {"UNKNOWN": -1, "LOW": 0, "MEDIUM": 1, "HIGH": 2}
+
+
 class ConfidenceScorer:
     """
     Loads trained models and scores pivot results.
@@ -348,7 +352,7 @@ class ConfidenceScorer:
             alias_score * 0.2
         )
  
-        return {
+        coverage = {
             "confidence_score": round(confidence_score, 4),
             "is_anomaly": False,
             **self._risk_fields(confidence_score, thresholds=(0.65, 0.4)),
@@ -356,6 +360,27 @@ class ConfidenceScorer:
             "software_count": software_count,
             "alias_count": alias_count,
             "note": "Score derived from MITRE ATT&CK coverage — technique breadth, tooling, and documentation depth.",
+        }
+
+        # Coverage measures how thoroughly ATT&CK documents a group, and a crew
+        # working through social engineering lists few tools. Community reporting
+        # is read on its own thresholds, and the higher level of the two stands.
+        community = self._score_group_from_community(pivot_result, results)
+        if LEVEL_RANK.get(community["risk_level"], -1) <= LEVEL_RANK[coverage["risk_level"]]:
+            return {**coverage, "community_level": community["risk_level"]}
+        return {
+            **community,
+            "technique_count": technique_count,
+            "software_count": software_count,
+            "alias_count": alias_count,
+            "coverage_score": coverage["confidence_score"],
+            "coverage_level": coverage["risk_level"],
+            "note": (
+                f"In MITRE ATT&CK, where coverage alone reads {coverage['risk_level']} "
+                f"({coverage['confidence_score']}). Scored from community reporting, "
+                f"which reads higher: {community['pulse_count']} OTX pulses from "
+                f"{community['distinct_authors']} authors."
+            ),
         }
  
     def score_software(self, pivot_result: dict) -> dict:
