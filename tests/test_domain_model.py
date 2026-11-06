@@ -2766,6 +2766,40 @@ def check_scoring_survives_malformed_input() -> None:
               f"{' (' + out['error'][:50] + ')' if out.get('error') else ''}")
 
 
+def check_tui_shortcuts_and_picker() -> None:
+    """
+    The TUI's shortcuts reach their actions, and its pivot picker offers what
+    the chain would follow.
+
+    The seed input has focus by default and binds ctrl+a and ctrl+e itself, and
+    Textual's command palette takes ctrl+p first, so three advertised shortcuts
+    did nothing. The picker read certificates from a key crt.sh no longer
+    writes and never read DNSDB, so it offered nothing for most investigations.
+    """
+    import tui
+
+    print("\n-- TUI shortcuts reach their actions, and the picker offers the chain's leads --")
+    bindings = {b.key: b for b in tui.MainScreen.BINDINGS}
+    check(bindings["ctrl+e"].priority and bindings["ctrl+a"].priority,
+          "export and select-all take priority over the focused seed input")
+    check(tui.OsintPivotTUI.ENABLE_COMMAND_PALETTE is False,
+          "the command palette no longer takes ctrl+p from Pivot from result")
+
+    result = {"visited": ["lead-seed.example"], "full_results": [
+        {"indicator": "lead-seed.example", "type": "domain", "results": {
+            "crtsh": {"certificate_count": 1, "certificates": [
+                {"names": "mail.lead-seed.example\nportal.other-lead.example", "issuer": "x"}]},
+            "dnsdb": {"records": [{"ip": "9.9.9.9", "domain": "lead-seed.example", "record_type": "a"}]},
+            "passivedns": {"records": [{"ip": "0.12.150.157", "domain": "lead-seed.example"},
+                                       {"ip": "104.16.0.1", "domain": "lead-seed.example"}]},
+        }}]}
+    offered = {value: kind for kind, value in tui.discovered_indicators(result)}
+    check("portal.other-lead.example" in offered,
+          f"certificate names from crt.sh are offered -> {sorted(offered)}")
+    check("0.12.150.157" not in offered and "104.16.0.1" not in offered,
+          "reserved space and CDN edges are not offered, as the chain would not follow them")
+
+
 def check_seed_formats() -> None:
     """
     A seed the analyst can actually paste has to resolve to a type.
@@ -3136,6 +3170,7 @@ def main() -> int:
     check_domain_models_load_independently()
     check_unfamiliar_is_a_note()
     check_scoring_survives_malformed_input()
+    check_tui_shortcuts_and_picker()
     check_actor_designators()
     check_crowdstrike_designators()
     check_malware_families()

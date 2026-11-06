@@ -192,14 +192,28 @@ def entry_agent_level(entry: dict) -> str | None:
     return None
 
 
+# The picker's labels for the detector's types.
+PICKER_KIND = {"ipv4": "ip", "domain": "domain", "url": "url", "md5": "hash",
+               "sha1": "hash", "sha256": "hash", "software": "malware",
+               "threat_group": "group", "cve": "cve"}
+
+
 def discovered_indicators(result: dict) -> list[tuple[str, str]]:
     """
     Pulls everything pivotable out of a completed investigation, so following
     a lead is a keypress instead of select, copy, paste.
 
+    Leads come from the chain's own extract_new_indicators, so the picker offers
+    what a deeper run would have followed, behind the same guards against
+    reserved space and CDN edges. ATT&CK groups and software, which the chain
+    does not follow, are offered beside them.
+
     Anything already visited is skipped: re-running the seed you just ran is
     never what you meant.
     """
+    from core.agent import extract_new_indicators
+    from core.detector import detect_type
+
     visited = {v.lower() for v in result.get("visited", [])}
     found: dict[str, str] = {}
 
@@ -209,15 +223,11 @@ def discovered_indicators(result: dict) -> list[tuple[str, str]]:
             found.setdefault(value, kind)
 
     for pivot in result.get("full_results", []):
-        results = pivot.get("results", {})
+        results = pivot.get("results", {}) or {}
 
-        for record in results.get("passivedns", {}).get("records", []):
-            add("ip", record.get("ip", ""))
-            add("domain", record.get("domain", ""))
-
-        for cert in results.get("censys", {}).get("certificates", []):
-            for name in (cert.get("names", "") or "").replace("\n", ",").split(","):
-                add("domain", name.strip().lstrip("*."))
+        for value in extract_new_indicators(pivot, sorted(visited)):
+            kind = (detect_type(value) or {}).get("type", "")
+            add(PICKER_KIND.get(kind, kind), value)
 
         for key in ("malwarebazaar", "malwarebazaar_related"):
             for sample in results.get(key, {}).get("samples", []) or []:
@@ -233,7 +243,7 @@ def discovered_indicators(result: dict) -> list[tuple[str, str]]:
                 for sample in entry.get("samples", []) or []:
                     add("hash", sample.get("sha256", ""))
 
-    order = {"hash": 0, "domain": 1, "ip": 2, "malware": 3, "group": 4}
+    order = {"hash": 0, "domain": 1, "ip": 2, "url": 3, "cve": 4, "malware": 5, "group": 6}
     return sorted(
         ((kind, value) for value, kind in found.items()),
         key=lambda pair: (order.get(pair[0], 9), pair[1]),
@@ -602,10 +612,13 @@ class MainScreen(Screen):
         # Drag-select works out of the box, but Textual binds ctrl+c to quit,
         # so copying a selection needs a key of its own.
         Binding("ctrl+shift+c", "copy_text", "Copy selection"),
-        Binding("ctrl+a", "select_all_results", "Select all"),
+        # Priority, because the seed input has focus by default and binds
+        # ctrl+a and ctrl+e to line start and end. Home and End still move the
+        # cursor there.
+        Binding("ctrl+a", "select_all_results", "Select all", priority=True),
         Binding("ctrl+p", "pick_indicator", "Pivot from result"),
         Binding("ctrl+l", "clear_results", "Clear"),
-        Binding("ctrl+e", "export_bundle", "Export JSON"),
+        Binding("ctrl+e", "export_bundle", "Export JSON", priority=True),
     ]
 
     def __init__(self) -> None:
@@ -899,6 +912,10 @@ class MainScreen(Screen):
 
 
 class OsintPivotTUI(App):
+    # Off, because Textual's command palette takes ctrl+p before any screen
+    # sees it, and ctrl+p is Pivot from result.
+    ENABLE_COMMAND_PALETTE = False
+
     CSS = f"""
     Screen {{ background: #0b1220; }}
 
