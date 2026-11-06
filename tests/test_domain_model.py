@@ -2252,6 +2252,73 @@ def check_cloud_is_not_cdn() -> None:
     check(not context["is_cdn"], "a domain is never classed as a CDN edge")
 
 
+def check_summary_refusal() -> None:
+    """
+    A refused summary is reported as declined and is not retried.
+
+    A refusal arrives as a response, with no exception and no text, so it looked
+    like an empty answer worth a second identical call. The control returns
+    empty content without a refusal and must still be retried.
+    """
+    import types
+    import core.agent as agent
+
+    print("\n-- a refused summary is declined once, not retried --")
+
+    class Model:
+        calls = 0
+
+        def __init__(self, stop_reason, text=""):
+            self.stop_reason, self.text = stop_reason, text
+
+        def invoke(self, messages):
+            Model.calls += 1
+            blocks = [{"type": "thinking", "thinking": ""}]
+            if self.text:
+                blocks.append({"type": "text", "text": self.text})
+            return types.SimpleNamespace(content=blocks,
+                                         response_metadata={"stop_reason": self.stop_reason})
+
+    def state():
+        return {"insufficient_data": False, "pivot_count": 2, "ml_score": 0.1,
+                "context_score": 0.1, "indicator_type": "ipv4", "risk_thresholds": [0.6, 0.3],
+                "seed": "192.0.2.10", "current_seed": "192.0.2.10", "pivot_results": [],
+                "pivot_queue": [], "visited": ["192.0.2.10"], "findings": ["one finding"],
+                "should_continue": False, "infrastructure_type": "unknown", "context_note": "",
+                "summary": "", "deep": False, "relevance_level": "none",
+                "summary_failed": False}
+
+    saved_llm, saved_backoff = agent.llm, agent.SUMMARY_BACKOFF
+    agent.SUMMARY_BACKOFF = 0
+    try:
+        Model.calls = 0
+        agent.llm = Model("refusal")
+        refused = agent.summarize(state())
+        refusal_calls = Model.calls
+
+        # Text written before the refusal is cut off and must not pass as a summary.
+        Model.calls = 0
+        agent.llm = Model("refusal", text="THREAT LEVEL: LOW. The address hosts")
+        partial = agent.summarize(state())
+
+        Model.calls = 0
+        agent.llm = Model("end_turn")
+        empty = agent.summarize(state())
+        empty_calls = Model.calls
+    finally:
+        agent.llm, agent.SUMMARY_BACKOFF = saved_llm, saved_backoff
+
+    check(refusal_calls == 1, f"a refusal is not retried -> {refusal_calls} call(s)")
+    check(refused["summary_failed"] and "SUMMARY DECLINED" in refused["summary"],
+          "it is recorded as no summary, and says the model declined")
+    check("re-run to obtain" not in refused["summary"],
+          "and does not tell the reader to re-run the same input")
+    check("The address hosts" not in partial["summary"] and "SUMMARY DECLINED" in partial["summary"],
+          "text cut off by a refusal is discarded, not published as the summary")
+    check(empty_calls == agent.SUMMARY_ATTEMPTS and "SUMMARY UNAVAILABLE" in empty["summary"],
+          f"control: plain empty content is still retried -> {empty_calls} call(s)")
+
+
 def check_seed_formats() -> None:
     """
     A seed the analyst can actually paste has to resolve to a type.
@@ -2614,6 +2681,7 @@ def main() -> int:
     check_urlhaus_answer_shapes()
     check_netblock_clustering()
     check_cloud_is_not_cdn()
+    check_summary_refusal()
     check_actor_designators()
     check_crowdstrike_designators()
     check_malware_families()

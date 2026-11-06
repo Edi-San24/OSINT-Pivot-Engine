@@ -1096,6 +1096,7 @@ def summarize(state: AgentState) -> AgentState:
     # Empty content counts as a failure rather than a short answer. It arrives
     # with no exception, so a retry on raise alone would not catch it.
     content = ""
+    declined = False
     for attempt in range(SUMMARY_ATTEMPTS):
         try:
             response = llm.invoke([
@@ -1121,6 +1122,14 @@ def summarize(state: AgentState) -> AgentState:
                     b.get("text", "") for b in content
                     if isinstance(b, dict) and b.get("type") == "text"
                 )
+            # A refusal is the model's answer to this input, not a transient
+            # fault, so the identical retry would only be declined again. Any
+            # text before it is cut off mid-thought and is not kept.
+            if (getattr(response, "response_metadata", None) or {}).get("stop_reason") == "refusal":
+                declined = True
+                content = ""
+                logger.error("Summary declined by the model (stop_reason: refusal). Not retried.")
+                break
             if isinstance(content, str) and content.strip():
                 break
             logger.warning(
@@ -1136,7 +1145,17 @@ def summarize(state: AgentState) -> AgentState:
     summary = content.strip() if isinstance(content, str) else ""
     state["summary_failed"] = not summary
 
-    if not summary:
+    if not summary and declined:
+        # Stated as a decline, since "re-run" would send the same input back.
+        summary = (
+            "SUMMARY DECLINED: the model declined to write an assessment of this "
+            "investigation's data, so no written assessment was produced. Re-running "
+            "sends the same input and is declined again.\n\n"
+            f"The pivot chain itself completed: {state['pivot_count']} pivot(s) and "
+            f"{len(state['findings'])} finding(s) were collected, and the threat "
+            "level below is the scored one, unchanged. Read the findings directly."
+        )
+    elif not summary:
         logger.error("Summary generation returned nothing.")
         # The level is unaffected, since it never came from here. What is missing
         # is the writing, and the reader must not mistake the level's presence
