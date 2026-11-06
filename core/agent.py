@@ -764,6 +764,12 @@ def extract_findings(result: dict) -> list[str]:
                 f"{indicator}: matches MITRE ATT&CK software entry "
                 f"{mitre['software_name']}."
             )
+        if mitre.get("match") == "partial":
+            matched = mitre.get("group_name") or mitre.get("software_name")
+            findings.append(
+                f"{indicator}: the ATT&CK match is on part of the name, so confirm "
+                f"{matched} is the one meant."
+            )
 
         # True totals, not len() of the truncated lists.
         techniques = mitre.get("techniques", [])
@@ -790,6 +796,11 @@ def extract_findings(result: dict) -> list[str]:
                 f"{indicator}: {total} associated software entries — {names}"
                 f"{' and others' if total > 5 else ''}."
             )
+    elif mitre.get("match") == "ambiguous":
+        findings.append(
+            f"{indicator}: the name belongs to several ATT&CK entries "
+            f"({', '.join((mitre.get('candidates') or [])[:5])}), so none was chosen."
+        )
 
     # SpiderFoot — identity footprint
     spiderfoot = results.get("spiderfoot", {})

@@ -2319,6 +2319,174 @@ def check_summary_refusal() -> None:
           f"control: plain empty content is still retried -> {empty_calls} call(s)")
 
 
+def _mini_attack_bundle(path: str) -> None:
+    """A handful of ATT&CK entries carrying the real bundle's name collisions."""
+    import uuid
+
+    def entry(kind, name, attack_id, aliases=(), revoked=False):
+        obj = {"type": kind, "id": f"{kind}--{uuid.uuid4()}",
+               "created": "2020-01-01T00:00:00.000Z", "modified": "2020-01-01T00:00:00.000Z",
+               "name": name,
+               "external_references": [{"source_name": "mitre-attack", "external_id": attack_id}]}
+        if kind == "intrusion-set":
+            obj["aliases"] = [name, *aliases]
+        else:
+            obj["x_mitre_aliases"] = [name, *aliases]
+            obj["labels"] = [kind]
+        if revoked:
+            obj["revoked"] = True
+        return obj
+
+    objects = [
+        entry("intrusion-set", "OilRig", "G0049", ["APT34"]),
+        entry("intrusion-set", "APT3", "G0022", ["Gothic Panda"]),
+        entry("intrusion-set", "Ke3chang", "G0004", ["APT15"]),
+        entry("intrusion-set", "APT1", "G0006", ["Comment Panda"]),
+        entry("intrusion-set", "APT28", "G0007", ["Fancy Bear"]),
+        entry("intrusion-set", "Putter Panda", "G0024", ["APT2"]),
+        entry("intrusion-set", "UNC2452", "G0118", ["NOBELIUM"], revoked=True),
+        entry("intrusion-set", "APT29", "G0016", ["NOBELIUM", "Cozy Bear"]),
+        entry("intrusion-set", "Lazarus Group", "G0032", ["Labyrinth Chollima"]),
+        entry("intrusion-set", "Thrip", "G0076"),
+        entry("intrusion-set", "Lotus Blossom", "G0030", ["Thrip"]),
+        entry("malware", "Clop", "S0611"),
+        entry("malware", "Cyclops Blink", "S0687"),
+        entry("malware", "LockBit 3.0", "S1202"),
+        entry("malware", "cd00r", "S1204"),
+        entry("malware", "WannaCry", "S0366"),
+        entry("malware", "jRAT", "S0283"),
+        entry("malware", "njRAT", "S0385"),
+    ]
+    with open(path, "w") as f:
+        json.dump({"type": "bundle", "id": f"bundle--{uuid.uuid4()}", "spec_version": "2.0",
+                   "objects": objects}, f)
+
+
+def _mini_mitre(path: str):
+    from mitreattack.stix20 import MitreAttackData
+    from connectors.mitre import MITREConnector
+
+    _mini_attack_bundle(path)
+    mitre = MITREConnector.__new__(MITREConnector)
+    mitre.attack_data = MitreAttackData(path)
+    return mitre
+
+
+def check_attack_name_resolution() -> None:
+    """
+    An ATT&CK name resolves to the entry that carries it, not the first entry
+    containing it.
+
+    Substring matching sent APT3 to the group holding APT34 and Clop to Cyclops
+    Blink, and searched revoked entries, which carry no techniques.
+    """
+    import tempfile
+
+    print("\n-- ATT&CK names resolve to their own entry --")
+    with tempfile.TemporaryDirectory() as tmp:
+        mitre = _mini_mitre(os.path.join(tmp, "attack.json"))
+
+        for query, expected in (("APT3", "APT3"), ("apt1", "APT1"), ("APT2", "Putter Panda"),
+                                ("NOBELIUM", "APT29"), ("Cozy Bear", "APT29"), ("Thrip", "Thrip")):
+            found = mitre.query_group(query)
+            check(found.get("group_name") == expected and found.get("match") == "exact",
+                  f"{query} -> {found.get('group_name')} ({found.get('match')})")
+
+        partial = mitre.query_group("Lazarus")
+        check(partial.get("group_name") == "Lazarus Group" and partial.get("match") == "partial",
+              f"a whole-word match on one entry is taken and labelled partial -> "
+              f"{partial.get('group_name')} ({partial.get('match')})")
+        shared = mitre.query_group("Panda")
+        check(not shared["found"] and shared.get("match") == "ambiguous"
+              and len(shared.get("candidates") or []) == 3,
+              f"a name inside several entries picks none -> {shared.get('candidates')}")
+        absent = mitre.query_group("FIN1")
+        check(not absent["found"] and absent.get("match") is None,
+              "a name in no entry is not found, rather than matched inside a longer one")
+        check(mitre.group_ref("Lazarus") is None
+              and mitre.group_ref("Labyrinth Chollima") == {"group_id": "G0032",
+                                                           "group_name": "Lazarus Group"},
+              "group_ref accepts exact names only")
+
+        for query, expected in (("Clop", "Clop"), ("LockBit 3.0", "LockBit 3.0"),
+                                ("jRAT", "jRAT"), ("trojan.wannacry/wanna", "WannaCry")):
+            found = mitre.query_software(query)
+            check(found.get("software_name") == expected,
+                  f"software {query} -> {found.get('software_name')}")
+
+
+def check_attack_bundle_refresh() -> None:
+    """
+    A stale ATT&CK bundle is refreshed, and a failed refresh keeps the copy on
+    disk rather than leaving the engine with none.
+    """
+    import tempfile
+    import time
+    import connectors.mitre as mitre_mod
+
+    print("\n-- the ATT&CK bundle refreshes when stale --")
+    new = json.dumps({"objects": [{"type": "intrusion-set", "name": "new"}]}).encode()
+
+    class Response:
+        def __init__(self, body):
+            self.content = body
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return json.loads(self.content)
+
+    calls = []
+
+    def serve(body):
+        def get(*args, **kwargs):
+            calls.append(1)
+            if body is None:
+                raise mitre_mod.requests.exceptions.ConnectionError("unreachable")
+            return Response(body)
+        return get
+
+    def read(path):
+        with open(path, "rb") as f:
+            return f.read()
+
+    saved = mitre_mod.requests.get
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "attack.json")
+            with open(path, "wb") as f:
+                f.write(b"old")
+            mitre_mod.requests.get = serve(new)
+            mitre_mod.ensure_bundle(path, max_age_days=30)
+            check(not calls and read(path) == b"old", "a fresh copy is not downloaded again")
+
+            stale = time.time() - 31 * 86400
+            os.utime(path, (stale, stale))
+            mitre_mod.ensure_bundle(path, max_age_days=30)
+            check(read(path) == new, "a stale copy is replaced")
+
+            os.utime(path, (stale, stale))
+            mitre_mod.requests.get = serve(None)
+            mitre_mod.ensure_bundle(path, max_age_days=30)
+            check(read(path) == new, "a failed refresh keeps the copy on disk")
+
+            mitre_mod.requests.get = serve(json.dumps({"objects": []}).encode())
+            mitre_mod.ensure_bundle(path, max_age_days=30)
+            check(read(path) == new and not os.path.exists(path + ".partial"),
+                  "a download holding no groups does not replace the copy")
+
+            mitre_mod.requests.get = serve(None)
+            try:
+                mitre_mod.ensure_bundle(os.path.join(tmp, "none.json"), max_age_days=30)
+                raised = False
+            except Exception:
+                raised = True
+            check(raised, "a failed first download raises, since nothing can answer")
+    finally:
+        mitre_mod.requests.get = saved
+
+
 def check_seed_formats() -> None:
     """
     A seed the analyst can actually paste has to resolve to a type.
@@ -2682,6 +2850,8 @@ def main() -> int:
     check_netblock_clustering()
     check_cloud_is_not_cdn()
     check_summary_refusal()
+    check_attack_name_resolution()
+    check_attack_bundle_refresh()
     check_actor_designators()
     check_crowdstrike_designators()
     check_malware_families()

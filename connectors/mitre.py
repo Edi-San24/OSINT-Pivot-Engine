@@ -3,16 +3,22 @@
 # Enriches indicators with TTP data, threat groups, and malware profiles.
 
 import os
-import json
+import re
+import time
 import logging
 import requests
 from mitreattack.stix20 import MitreAttackData
 
-from config import DATA_DIR, STIX_CACHE_PATH
+from config import STIX_CACHE_PATH
 
 logger = logging.getLogger(__name__)
 
 STIX_URL = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"
+
+# ATT&CK adds groups and aliases between releases, and a name it gained since
+# the cached copy cannot be matched at all.
+BUNDLE_MAX_AGE_DAYS = 30
+BUNDLE_TIMEOUT = 120
 
 MAX_TECHNIQUES = 20
 MAX_GROUPS = 10
@@ -20,35 +26,89 @@ MAX_SOFTWARE = 10
 DESCRIPTION_LIMIT = 300
 
 
+def ensure_bundle(path: str = STIX_CACHE_PATH, max_age_days: int = BUNDLE_MAX_AGE_DAYS) -> None:
+    """
+    Downloads the Enterprise ATT&CK bundle when it is missing or older than
+    max_age_days.
+
+    A failed refresh keeps the copy on disk, since a stale bundle still answers.
+    A failed first download raises, since nothing does. The file is replaced
+    only once a complete bundle has arrived.
+    """
+    exists = os.path.exists(path)
+    if exists and time.time() - os.path.getmtime(path) < max_age_days * 86400:
+        return
+
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    try:
+        response = requests.get(STIX_URL, timeout=BUNDLE_TIMEOUT)
+        response.raise_for_status()
+        objects = response.json().get("objects") or []
+        if not any(o.get("type") == "intrusion-set" for o in objects):
+            raise ValueError("downloaded bundle holds no groups")
+        partial = f"{path}.partial"
+        with open(partial, "wb") as f:
+            f.write(response.content)
+        os.replace(partial, path)
+        logger.info(f"ATT&CK bundle refreshed: {path}")
+    except Exception as e:
+        if not exists:
+            logger.error(f"Failed to download the ATT&CK bundle: {str(e)[:200]}")
+            raise
+        logger.warning(f"ATT&CK refresh failed, keeping the cached bundle: {str(e)[:120]}")
+
+
+def _names(entry) -> list[str]:
+    """An ATT&CK object's name and aliases. Groups and software keep them under different keys."""
+    aliases = getattr(entry, "aliases", None) or getattr(entry, "x_mitre_aliases", None) or []
+    return [entry.name, *aliases]
+
+
+def resolve_name(entries: list, name: str) -> tuple:
+    """
+    The entry a name refers to, as (entry, match, candidates).
+
+    An exact match wins, ignoring case: an entry's own name first, since ATT&CK
+    also lists some names as another entry's alias, then its aliases. Failing
+    that, a whole-word match is accepted when exactly one entry has one, and is
+    reported as "partial" so the reader can confirm it. A name shared by
+    several entries is "ambiguous" and picks none, since the first hit is an
+    accident of file order.
+    """
+    query = (name or "").strip().lower()
+    if not query:
+        return None, None, []
+
+    named = [e for e in entries if e.name.lower() == query]
+    if len(named) == 1:
+        return named[0], "exact", []
+
+    exact = {e.id: e for e in entries if query in (n.lower() for n in _names(e))}
+    if len(exact) == 1:
+        return next(iter(exact.values())), "exact", []
+    if len(exact) > 1:
+        return None, "ambiguous", sorted(e.name for e in exact.values())
+
+    word = re.compile(rf"(?<!\w){re.escape(query)}(?!\w)", re.IGNORECASE)
+    partial = {e.id: e for e in entries if any(word.search(n) for n in _names(e))}
+    if len(partial) == 1:
+        return next(iter(partial.values())), "partial", []
+    if len(partial) > 1:
+        return None, "ambiguous", sorted(e.name for e in partial.values())
+    return None, None, []
+
+
 class MITREConnector:
     """
     Connector for the MITRE ATT&CK framework.
-    Downloads and caches the Enterprise ATT&CK STIX bundle on first run.
-    Supports software and threat group lookups by name.
+    Downloads the Enterprise ATT&CK STIX bundle on first run and refreshes it
+    monthly. Supports software and threat group lookups by name.
     """
 
     def __init__(self):
-        self._ensure_stix_data()
+        ensure_bundle()
         self.attack_data = MitreAttackData(STIX_CACHE_PATH)
         logger.info("MITRE ATT&CK connector initialized.")
-
-    def _ensure_stix_data(self):
-        """
-        Downloads and caches the MITRE ATT&CK STIX bundle if not already present.
-        Only runs on first use — subsequent calls load from disk.
-        """
-        if not os.path.exists(STIX_CACHE_PATH):
-            os.makedirs(DATA_DIR, exist_ok=True)
-            logger.info("Downloading MITRE ATT&CK STIX bundle (first run)...")
-            try:
-                response = requests.get(STIX_URL, timeout=60)
-                response.raise_for_status()
-                with open(STIX_CACHE_PATH, "w") as f:
-                    json.dump(response.json(), f)
-                logger.info("STIX bundle cached to data/enterprise-attack.json")
-            except Exception as e:
-                logger.error(f"Failed to download STIX bundle: {str(e)}")
-                raise
 
     def _get_attack_id(self, stix_obj) -> str:
         """
@@ -73,32 +133,39 @@ class MITREConnector:
             label = label.split("/")[0]
         return label.strip().lower()
 
-    def _find_software_by_name(self, name: str):
+    def _find_software_by_name(self, name: str) -> tuple:
         """
-        Searches all ATT&CK software entries for a name match.
-        Uses substring match to handle naming variations.
-        """
-        all_software = self.attack_data.get_software()
-        name_lower = name.lower()
-        for sw in all_software:
-            if name_lower in sw.name.lower():
-                return sw
-        return None
+        Resolves a software name among live entries, as (entry, match,
+        candidates, searched_as).
 
-    def _find_group_by_name(self, name: str):
+        The name is tried as given first. A VirusTotal label is cleaned only
+        when that fails, since cleaning splits on dots and slashes that real
+        names such as "LockBit 3.0" and "OSX/Shlayer" contain.
         """
-        Searches all ATT&CK groups for a name or alias match.
+        live = self.attack_data.get_software(remove_revoked_deprecated=True)
+        software, match, candidates = resolve_name(live, name)
+        searched_as = (name or "").strip().lower()
+        if software is None and match != "ambiguous":
+            cleaned = self._clean_malware_name(name)
+            if cleaned != searched_as:
+                software, match, candidates = resolve_name(live, cleaned)
+                searched_as = cleaned
+        return software, match, candidates, searched_as
+
+    def _find_group_by_name(self, name: str) -> tuple:
+        """Resolves a group name among live groups, as (group, match, candidates)."""
+        live = self.attack_data.get_groups(remove_revoked_deprecated=True)
+        return resolve_name(live, name)
+
+    def group_ref(self, name: str) -> dict | None:
         """
-        all_groups = self.attack_data.get_groups()
-        name_lower = name.lower()
-        for group in all_groups:
-            if name_lower in group.name.lower():
-                return group
-            aliases = getattr(group, "aliases", []) or []
-            for alias in aliases:
-                if name_lower in alias.lower():
-                    return group
-        return None
+        The ATT&CK group a name exactly is, or None. No partial matching, for
+        callers relating one actor name to another.
+        """
+        group, match, _ = self._find_group_by_name(name)
+        if group is None or match != "exact":
+            return None
+        return {"group_id": self._get_attack_id(group), "group_name": group.name}
 
     def _extract_techniques(self, techniques_used: list) -> list:
         """
@@ -124,8 +191,7 @@ class MITREConnector:
         Returns associated techniques and threat groups that use it.
         """
         try:
-            clean_name = self._clean_malware_name(name)
-            software = self._find_software_by_name(clean_name)
+            software, match, candidates, clean_name = self._find_software_by_name(name)
 
             if not software:
                 return {
@@ -134,6 +200,8 @@ class MITREConnector:
                     "source": "mitre_attack",
                     "found": False,
                     "searched_as": clean_name,
+                    "match": match,
+                    "candidates": candidates,
                     "techniques": [],
                     "groups": [],
                 }
@@ -159,6 +227,7 @@ class MITREConnector:
                 "source": "mitre_attack",
                 "found": True,
                 "searched_as": clean_name,
+                "match": match,
                 "stix_id": stix_id,
                 "software_name": software.name,
                 "software_type": getattr(software, "type", "unknown"),
@@ -180,7 +249,7 @@ class MITREConnector:
         Returns associated techniques and software used by the group.
         """
         try:
-            group = self._find_group_by_name(name)
+            group, match, candidates = self._find_group_by_name(name)
 
             if not group:
                 return {
@@ -188,6 +257,8 @@ class MITREConnector:
                     "type": "group",
                     "source": "mitre_attack",
                     "found": False,
+                    "match": match,
+                    "candidates": candidates,
                     "techniques": [],
                     "software": [],
                 }
@@ -217,6 +288,7 @@ class MITREConnector:
                 "type": "group",
                 "source": "mitre_attack",
                 "found": True,
+                "match": match,
                 "stix_id": stix_id,
                 "group_name": group.name,
                 "aliases": getattr(group, "aliases", []),
