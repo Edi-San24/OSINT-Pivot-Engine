@@ -752,7 +752,25 @@ class ConfidenceScorer:
           email/username/filename -> score_identity (SpiderFoot findings)
           domain                  -> score (ML model), or score_from_evidence
                                      when no domain model is installed
+
+        A source answer in a shape the scorer does not expect makes the score
+        UNKNOWN with the error recorded, rather than ending the investigation
+        and losing every pivot already collected.
         """
+        try:
+            return self._route(pivot_result)
+        except Exception as e:
+            logger.exception(f"Scoring failed for {str(pivot_result.get('indicator', ''))[:60]}")
+            return {
+                "confidence_score": 0.0,
+                "risk_level": "UNKNOWN",
+                "error": f"scoring failed: {type(e).__name__}: {str(e)[:160]}",
+                "note": "A source answered in a shape the scorer could not read, so "
+                        "no score was produced. This is not a clean result.",
+            }
+
+    def _route(self, pivot_result: dict) -> dict:
+        """Picks the scoring method for the indicator type. See score_any."""
         indicator_type = pivot_result.get("type", "")
 
         if indicator_type == "threat_group":

@@ -2741,6 +2741,31 @@ def check_unfamiliar_is_a_note() -> None:
           "the investigation gains the caution finding only when the domain is unfamiliar")
 
 
+def check_scoring_survives_malformed_input() -> None:
+    """
+    A source answer in an unexpected shape makes the score UNKNOWN with the
+    error recorded. It used to raise out of score_any and end the whole
+    investigation, losing every pivot already collected.
+    """
+    print("\n-- a malformed source answer scores UNKNOWN instead of crashing --")
+    scorer = ConfidenceScorer()
+    shapes = {
+        "domain": {"virustotal": [], "threatfox": "x", "otx": None, "dns": {"a": None}},
+        "threat_group": {"mitre": {"found": True, "techniques": None, "aliases": None}},
+        "ipv4": {"virustotal": "x", "threatfox": [], "urlhaus": None},
+    }
+    for kind, results in shapes.items():
+        try:
+            out = scorer.score_any({"indicator": "odd.example", "type": kind, "results": results})
+            crashed = None
+        except Exception as e:
+            out, crashed = {}, f"{type(e).__name__}: {e}"
+        check(crashed is None and out.get("risk_level") in ("UNKNOWN", "LOW", "MEDIUM", "HIGH")
+              and (out.get("risk_level") == "UNKNOWN" or "error" not in out),
+              f"{kind} with mis-shaped sources -> {crashed or out.get('risk_level')}"
+              f"{' (' + out['error'][:50] + ')' if out.get('error') else ''}")
+
+
 def check_seed_formats() -> None:
     """
     A seed the analyst can actually paste has to resolve to a type.
@@ -3110,6 +3135,7 @@ def main() -> int:
     check_group_score_takes_stronger_reading()
     check_domain_models_load_independently()
     check_unfamiliar_is_a_note()
+    check_scoring_survives_malformed_input()
     check_actor_designators()
     check_crowdstrike_designators()
     check_malware_families()
