@@ -115,6 +115,10 @@ CDN_RANGES = tuple(ipaddress.ip_network(n) for n in (
     "151.101.0.0/16", "199.232.0.0/16",
     # Akamai
     "23.32.0.0/11", "23.192.0.0/11", "104.64.0.0/10", "184.24.0.0/13",
+    # Shopify storefronts: the one address Shopify tells every merchant to point
+    # a domain at. Cloudflare announces Shopify's prefix, so no Cloudflare list
+    # holds it, and only the documented address is shared.
+    "23.227.38.65/32",
     # Amazon CloudFront, the /20 and wider blocks of AWS's published ranges,
     # leaving out any that also hold EC2 space
     "3.160.0.0/13", "3.168.0.0/14", "3.172.0.0/17", "3.173.0.0/16", "3.174.0.0/15",

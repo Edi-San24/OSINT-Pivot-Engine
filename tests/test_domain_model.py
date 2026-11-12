@@ -2246,6 +2246,17 @@ def check_cloud_is_not_cdn() -> None:
         check(context["is_cdn"] and context["confidence_modifier"] == -0.6,
               f"shared edge {ip} is still a CDN -> {context['infrastructure_type']}")
 
+    # A provider prefix that Cloudflare announces is in no Cloudflare list, so a
+    # documented shared address is listed by itself, and its neighbours are not.
+    storefront = detect_infrastructure_type(pivot("23.227.38.65", "CLOUDFLARENET - Cloudflare, Inc.",
+                                                  "Shopify, Inc."))
+    check(storefront["is_cdn"] and storefront["confidence_modifier"] == -0.6,
+          f"the storefront address merchants are told to use is a shared edge -> "
+          f"{storefront['infrastructure_type']}, {storefront['confidence_modifier']}")
+    neighbour = detect_infrastructure_type(pivot("23.227.38.66", "CLOUDFLARENET - Cloudflare, Inc.",
+                                                 "Shopify, Inc."))
+    check(not neighbour["is_cdn"], "and only that address, not the rest of the provider's prefix")
+
     # A domain is one tenant's name wherever it is served from.
     context = detect_infrastructure_type(pivot("cdn-fronted.example", "CLOUDFLARENET",
                                                "Cloudflare", kind="domain"))

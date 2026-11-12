@@ -18,7 +18,7 @@
     {"indicator": "thekinsmenservers.com", "type": "domain", "truth": "benign", "source": "analyst", "note": "legitimate hosting provider, zero VirusTotal, the model over-flags this shape"},
     {"indicator": "crystalwebhost.com", "type": "domain", "truth": "benign", "source": "analyst", "note": "web host, the bulk-hosting false-positive case"},
     {"indicator": "americancasinoguidebook.com", "type": "domain", "truth": "benign", "source": "analyst", "note": "licensed gambling, a sector that correlates with abuse"},
-    {"indicator": "dizaynholding.com", "type": "domain", "truth": "benign", "source": "analyst", "note": "ordinary business, Tranco rank window"},
+    {"indicator": "dizaynholding.com", "type": "domain", "truth": "benign", "source": "analyst", "note": "business site 2012 to 2021; re-registered 25 June 2026 behind a privacy service and redirecting to an unrelated shop since July 2026, so not attacker infrastructure. The domain model scores it on age alone and peaks at four to seven months old"},
     {"indicator": "easyweb.eu", "type": "domain", "truth": "benign", "source": "analyst", "note": "ordinary business the model scored MEDIUM"},
     {"indicator": "solidstatelogic.com", "type": "domain", "truth": "benign", "source": "analyst", "note": "established manufacturer"},
     {"indicator": "shuttleworthfoundation.org", "type": "domain", "truth": "benign", "source": "analyst", "note": "foundation"},
