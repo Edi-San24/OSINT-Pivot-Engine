@@ -70,6 +70,7 @@ def _row(result: dict, truth: str | None = None, truth_source: str = "analyst") 
         "seed": result.get("indicator", ""),
         "indicator_type": result.get("indicator_type", "unknown"),
         "pivot_count": result.get("pivot_count", 0),
+        "planner": result.get("planner", "rule"),
         "finding_count": len(result.get("findings") or []),
         "ml_score": result.get("ml_score", 0.0),
         "context_score": context_score,

@@ -61,5 +61,9 @@ VIRUSTOTAL_PER_MINUTE = int(os.getenv("VIRUSTOTAL_PER_MINUTE", "4"))
 MAX_PIVOT_DEPTH = 3 # Amount of pivots the agent can make 
 MAX_RESULTS_PER_SOURCE = 10
 
+# Model that picks the next pivot when the planner is on. A decision is one
+# choice from a short list, so the smallest current model is enough.
+PIVOT_PLANNER_MODEL = os.getenv("PIVOT_PLANNER_MODEL", "claude-haiku-5-5")
+
 # Output settings
 DEFAULT_OUTPUT_FORMAT = "terminal" # options: terminal, json, csv

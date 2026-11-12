@@ -34,6 +34,7 @@ from core.risk import (
     resolve_risk_level,
 )
 from core import disagreement
+from core import planner
 from core import provenance
 
 # tier.py is local-only, like the licensed connectors it detects. A public clone
@@ -98,6 +99,12 @@ class AgentState(TypedDict):
     indicator_type: str
     pivot_results: list[dict]
     pivot_queue: list[str]
+    # Who picks the next pivot, "rule" or "model". Scoring is code either way.
+    planner: str
+    # How each queued candidate was reached, for the planner to weigh.
+    candidate_origins: dict
+    # One record per choice of next pivot: who made it, what, and why.
+    pivot_decisions: list[dict]
     visited: list[str]
     findings: list[str]
     should_continue: bool
@@ -181,16 +188,28 @@ def safe_json(obj: object, limit: int = 0) -> str:
     return result
  
  
-def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
+def extract_new_indicators(result: dict, visited: list[str],
+                           origins: dict | None = None) -> list[str]:
     """
     Extracts new pivotable indicators from a completed pivot result.
     For domains: extracts IPs from PassiveDNS and subdomains from crt.sh.
     For IPs: extracts domains from PassiveDNS records.
     For hashes: extracts related SHA256 hashes from MalwareBazaar tag results.
+
+    When origins is given, records how each new indicator was reached, keyed by
+    value, so a planner can weigh candidates by relationship. The first
+    relationship found is kept.
     """
     new_indicators: list[str] = []
     indicator_type = result.get("type", "")
     results = result.get("results", {})
+    source = result.get("indicator", "")
+
+    def add(value: str, how: str, last_seen=None) -> None:
+        new_indicators.append(value)
+        if origins is not None and value not in origins:
+            seen = _seen_date(last_seen)
+            origins[value] = f"{how}, from {source}" + (f", last seen {seen}" if seen else "")
  
     passivedns = results.get("passivedns", {})
     records = list(passivedns.get("records", []))
@@ -207,14 +226,14 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             ip = record.get("ip", "")
             record_type = record.get("record_type", "")
             if record_type == "a" and ip and is_ipv4(ip) and ip not in visited:
-                new_indicators.append(ip)
+                add(ip, "address the domain resolved to (passive DNS)", record.get("last_seen"))
 
         # Where the domain points now. Chained alongside passive DNS rather
         # than instead of it: a domain with no history still resolves, so
         # reading only passive DNS would leave its live addresses unexamined.
         for ip in (results.get("dns", {}) or {}).get("a", []) or []:
             if is_ipv4(ip) and ip not in visited:
-                new_indicators.append(ip)
+                add(ip, "address the domain resolves to now")
 
         # Addresses the domain's own SPF record authorises. Published by the
         # operator and reported as infrastructure by nothing else, so a host
@@ -224,7 +243,7 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
         spf = (results.get("dns", {}) or {}).get("spf") or {}
         for ip in spf.get("ipv4") or []:
             if is_ipv4(ip) and ip not in visited:
-                new_indicators.append(ip)
+                add(ip, "address authorised in the domain's SPF record")
 
         # crt.sh, the legacy key older saved investigations used, or the
         # licensed fallback when crt.sh did not answer.
@@ -234,18 +253,18 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             for name in names.replace("\n", ",").split(","):
                 name = name.strip().lstrip("*.")
                 if name and is_domain(name) and name not in visited:
-                    new_indicators.append(name)
+                    add(name, "name on a certificate issued for the domain")
  
     elif indicator_type == "url":
         # The host gets its own pivot, and any payload URLhaus recorded is a
         # sample worth following. Without this a URL seed stopped at one pivot.
         host = (results.get("url_parts") or {}).get("host") or ""
         if host and host not in visited:
-            new_indicators.append(host)
+            add(host, "host of the URL")
         for payload in (results.get("urlhaus") or {}).get("payloads") or []:
             sha256 = payload.get("sha256", "")
             if sha256 and sha256 not in visited:
-                new_indicators.append(sha256)
+                add(sha256, "payload the URL served (URLhaus)")
 
     elif indicator_type == "ipv4":
         for record in records:
@@ -253,7 +272,8 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             # both, so reading one alone would chain no co-tenants at all.
             value = record.get("domain") or record.get("ip") or ""
             if value and is_domain(value) and value not in visited:
-                new_indicators.append(value)
+                add(value, "domain that resolved to the address (passive DNS)",
+                    record.get("last_seen"))
  
     elif indicator_type == "hash":
         bazaar_related = results.get("malwarebazaar_related", {})
@@ -261,7 +281,7 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
         for sample in samples:
             sha256 = sample.get("sha256", "")
             if sha256 and sha256 != "unknown" and sha256 not in visited:
-                new_indicators.append(sha256)
+                add(sha256, "related sample (MalwareBazaar)")
 
         # The hosts URLhaus recorded serving this sample. A hash pivot that
         # reaches the staging infrastructure and does not follow it leaves the
@@ -272,7 +292,7 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             if not host or host in visited:
                 continue
             if is_ipv4(host) or is_domain(host):
-                new_indicators.append(host)
+                add(host, "host that served the sample (URLhaus)")
 
     elif indicator_type == "cve":
         # Hosts a feed tags with the CVE, so the pivot continues from the
@@ -280,14 +300,14 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
         for host in (results.get("threatfox_tag") or {}).get("hosts") or []:
             value = (host.get("host") or "").strip()
             if value and (is_ipv4(value) or is_domain(value)) and value not in visited:
-                new_indicators.append(value)
+                add(value, "host tagged with the CVE (ThreatFox)")
 
         # Samples tagged with it, whose hash pivots follow the hosts serving them.
         # This reaches infrastructure even where no host carries the tag.
         for sample in (results.get("malwarebazaar_tag") or {}).get("samples") or []:
             sha256 = sample.get("sha256", "")
             if sha256 and sha256 != "unknown" and sha256 not in visited:
-                new_indicators.append(sha256)
+                add(sha256, "sample tagged with the CVE (MalwareBazaar)")
 
     elif indicator_type == "threat_group":
         # Samples labelled with the actor's own name come first: they are
@@ -299,7 +319,7 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             for sample in bazaar_result.get("samples", []):
                 sha256 = sample.get("sha256", "")
                 if sha256 and sha256 != "unknown" and sha256 not in visited:
-                    new_indicators.append(sha256)
+                    add(sha256, "sample labelled with the actor's name (MalwareBazaar)")
 
         # Sample hashes from the group's tooling, so the pivot continues into
         # live samples rather than dead-ending at ATT&CK.
@@ -309,13 +329,13 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             for sample in bazaar_result.get("samples", []):
                 sha256 = sample.get("sha256", "")
                 if sha256 and sha256 != "unknown" and sha256 not in visited:
-                    new_indicators.append(sha256)
+                    add(sha256, "sample of the actor's tooling (MalwareBazaar)")
  
     # NER extraction — scan text fields for threat actor mentions
     threat_actors = ner_extractor.extract_threat_actors(result, visited)
     for actor in threat_actors:
         if actor not in new_indicators:
-            new_indicators.append(actor)
+            add(actor, "threat actor named in source text")
  
     seen: set[str] = set()
     clean: list[str] = []
@@ -325,6 +345,22 @@ def extract_new_indicators(result: dict, visited: list[str]) -> list[str]:
             clean.append(ind)
  
     return clean
+
+
+def _seen_date(value) -> str:
+    """A passive DNS last-seen value as a date, or empty when it has none."""
+    if value in (None, "", "unknown"):
+        return ""
+    if isinstance(value, (int, float)) or (isinstance(value, str) and value.isdigit()):
+        seconds = float(value)
+        # Some sources report milliseconds.
+        if seconds > 1e11:
+            seconds /= 1000
+        try:
+            return time.strftime("%Y-%m-%d", time.gmtime(seconds))
+        except (OverflowError, OSError, ValueError):
+            return ""
+    return str(value)[:10]
  
  
 def run_pivot(state: AgentState) -> AgentState:
@@ -341,7 +377,9 @@ def run_pivot(state: AgentState) -> AgentState:
     state["pivot_count"] += 1
     state["visited"].append(current)
  
-    new_indicators = extract_new_indicators(result, state["visited"])
+    new_indicators = extract_new_indicators(
+        result, state["visited"], origins=state.get("candidate_origins")
+    )
     if new_indicators:
         logger.info(f"Discovered {len(new_indicators)} new indicators: {new_indicators}")
         state["pivot_queue"].extend(new_indicators)
@@ -855,8 +893,10 @@ def extract_findings(result: dict) -> list[str]:
  
 def analyze_results(state: AgentState) -> AgentState:
     """
-    Records findings from the latest pivot and advances the queue.
-    Deterministic — control flow comes from the queue and the depth cap.
+    Records findings from the latest pivot and picks the next one.
+
+    The rule picks unless the planner is on, and the planner can only choose
+    from the queue or stop. The depth cap is enforced here either way.
     """
     logger.info("Recording findings and advancing queue...")
 
@@ -864,10 +904,15 @@ def analyze_results(state: AgentState) -> AgentState:
     state["findings"].extend(extract_findings(latest))
 
     # NER — scan latest pivot result for threat actor mentions and queue them
+    origins = state.get("candidate_origins")
     actors = ner_extractor.extract_threat_actors(latest, state["visited"])
     for actor in actors:
         if actor not in state["pivot_queue"] and actor not in state["visited"]:
             state["pivot_queue"].append(actor)
+            if origins is not None:
+                origins.setdefault(
+                    actor, f"threat actor named in source text, from {latest.get('indicator', '')}"
+                )
             logger.info(f"NER queued threat actor: {actor}")
 
     # Advance the queue, preferring infrastructure over another sample.
@@ -882,7 +927,15 @@ def analyze_results(state: AgentState) -> AgentState:
     if state["pivot_count"] < config.MAX_PIVOT_DEPTH:
         pending = [c for c in state["pivot_queue"] if c not in state["visited"]]
         infrastructure = [c for c in pending if is_ipv4(c) or is_domain(c)]
-        candidate = (infrastructure or pending or [None])[0]
+        ordered = list(dict.fromkeys(infrastructure + pending))
+        if state.get("planner") == "model" and ordered:
+            decision = planner.choose_next(state, ordered)
+            state.setdefault("pivot_decisions", []).append(decision)
+            candidate = decision["chosen"]
+            if decision["action"] == "stop":
+                logger.info(f"Planner stopped the chain: {decision['reason']}")
+        else:
+            candidate = (ordered or [None])[0]
         if candidate:
             state["pivot_queue"] = [c for c in state["pivot_queue"] if c != candidate]
             state["current_seed"] = candidate
@@ -1235,10 +1288,14 @@ def should_continue_pivot(state: AgentState) -> str:
     return "summarize"
  
  
-def run_agent(seed: str, deep: bool = False) -> dict:
+def run_agent(seed: str, deep: bool = False, agentic: bool = False) -> dict:
     """
     Entry point for the OSINT Pivot Engine agent.
     Initializes state and runs the full LangGraph pipeline.
+
+    agentic=True lets the planner model choose each next pivot from the
+    extracted candidates, or stop early. Scoring is unchanged, but the path can
+    differ between runs, and the graph and chain evidence follow the path.
     """
     detected = detect_type(seed)
     indicator_type = detected["type"] if detected else "unknown"
@@ -1249,6 +1306,9 @@ def run_agent(seed: str, deep: bool = False) -> dict:
         "indicator_type": indicator_type,
         "pivot_results": [],
         "pivot_queue": [],
+        "planner": "model" if agentic else "rule",
+        "candidate_origins": {},
+        "pivot_decisions": [],
         "visited": [],
         "findings": [],
         "should_continue": True,
@@ -1294,6 +1354,8 @@ def run_agent(seed: str, deep: bool = False) -> dict:
         "summary": final_state["summary"],
         "findings": final_state["findings"],
         "pivot_count": final_state["pivot_count"],
+        "planner": final_state.get("planner", "rule"),
+        "pivot_decisions": final_state.get("pivot_decisions") or [],
         "ml_score": final_state["ml_score"],
         "context_score": final_state["context_score"],
         "model_score": final_state.get("model_score", 0.0),

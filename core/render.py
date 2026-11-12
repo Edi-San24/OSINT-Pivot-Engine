@@ -243,3 +243,27 @@ def build_metrics_table(result: dict, verbose: bool = False) -> Table:
         table.add_row("[bold yellow]NER[/bold yellow]", f"[yellow]{ner_notes[0]}[/yellow]")
 
     return table
+
+
+def build_pivot_path(result: dict) -> Table | None:
+    """The planner's choices, one row per decision, or None when the rule chose."""
+    decisions = result.get("pivot_decisions") or []
+    if result.get("planner") != "model" or not decisions:
+        return None
+
+    table = Table(title="Pivot path", title_justify="left", title_style="bold cyan",
+                  box=box.SIMPLE, padding=(0, 2))
+    table.add_column("After", justify="right", style="dim")
+    table.add_column("Next")
+    table.add_column("Chosen by")
+    table.add_column("Why")
+    for d in decisions:
+        by = "rule, model failed" if d.get("fallback") else d.get("decided_by", "")
+        # Text, not markup: indicators and the model's reason are untrusted.
+        table.add_row(
+            str(d.get("after_pivot", "")),
+            Text(str(d.get("chosen") or "stop")),
+            by,
+            Text(str(d.get("fallback") or d.get("reason") or "")),
+        )
+    return table

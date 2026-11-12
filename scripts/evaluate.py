@@ -53,6 +53,9 @@ def main() -> int:
     parser.add_argument("--truth", help="Comma-separated labels to include.")
     parser.add_argument("--limit", type=int, default=0, help="Stop after N cases.")
     parser.add_argument("--output", help="Write per-case results to JSON.")
+    parser.add_argument("--agentic", action="store_true",
+                        help="Let the planner model choose each next pivot. Compare "
+                             "against a run without it before making it the default.")
     args = parser.parse_args()
 
     cases = json.load(open(EVAL_SET, encoding="utf-8"))["cases"]
@@ -65,14 +68,15 @@ def main() -> int:
     if args.limit:
         cases = cases[:args.limit]
 
-    print(f"{len(cases)} case(s). One investigation each, so this spends quota.\n")
+    print(f"{len(cases)} case(s). One investigation each, so this spends quota.")
+    print(f"Pivots chosen by: {'the planner model' if args.agentic else 'the rule'}\n")
     print(f"  {'indicator':38} {'truth':10} {'score':>7} {'final':8} {'by':9} ok")
 
     rows = []
     for case in cases:
         seed = case["indicator"]
         try:
-            result = run_agent(seed, deep=False)
+            result = run_agent(seed, deep=False, agentic=args.agentic)
         except Exception as e:
             print(f"  {seed[:36]:38} {case['truth']:10} FAILED {type(e).__name__}: {str(e)[:40]}")
             rows.append({**case, "error": str(e)[:120], "correct": None})
@@ -87,6 +91,8 @@ def main() -> int:
             "resolved": resolved,
             "decided_by": verdict_source(result),
             "correct": is_correct(resolved, case["truth"]),
+            "pivot_count": result.get("pivot_count"),
+            "pivot_decisions": result.get("pivot_decisions") or [],
         }
         rows.append(row)
         print(f"  {seed[:36]:38} {case['truth']:10} {row['score']:7} {resolved:8} "
@@ -122,6 +128,23 @@ def main() -> int:
     for r in would_break:
         print(f"     ignored well {r['indicator'][:32]:34} scored {r['resolved']}, "
               f"dissent {r['dissent']}, truth {r['truth']}")
+
+    if args.agentic:
+        # Whether the planner actually decided, or the rule stood in for it. A
+        # run where most decisions fell back measures the rule, not the model.
+        decisions = [d for r in rows for d in r.get("pivot_decisions") or []]
+        by_model = [d for d in decisions if d.get("decided_by") == "model"]
+        stops = [d for d in by_model if d.get("action") == "stop"]
+        tokens = sum(((d.get("usage") or {}).get("input_tokens") or 0)
+                     + ((d.get("usage") or {}).get("output_tokens") or 0) for d in decisions)
+        pivots = [r["pivot_count"] for r in rows if r.get("pivot_count") is not None]
+        print(f"\n  planner decisions {len(decisions)}: {len(by_model)} by the model "
+              f"({len(stops)} stops), {len(decisions) - len(by_model)} fell back to the rule; "
+              f"{tokens} tokens; mean pivots {sum(pivots) / len(pivots):.2f}" if pivots else
+              "\n  planner made no decisions")
+        for d in decisions:
+            if d.get("fallback"):
+                print(f"     fallback  {d['fallback'][:90]}")
 
     misses = [r for r in scored if not r["correct"]]
     if misses:

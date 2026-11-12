@@ -148,7 +148,8 @@ def detect_indicator_type(indicator: str) -> dict:
 
 
 @mcp.tool()
-def investigate(seed: str, depth: int = 3, deep: bool = False) -> dict:
+def investigate(seed: str, depth: int = 3, deep: bool = False,
+                agentic: bool = False) -> dict:
     """
     Run a full OSINT investigation on one seed indicator.
 
@@ -172,6 +173,10 @@ def investigate(seed: str, depth: int = 3, deep: bool = False) -> dict:
         deep: Enable SpiderFoot enrichment for email and username seeds. Has no
             effect on other indicator types and makes the call substantially
             slower.
+        agentic: Let a model choose each next pivot from the candidates the
+            chain found, or stop early. Scoring is unchanged; the path, and so
+            the evidence collected, can differ between runs. Each choice and
+            its reason is returned under pivot_decisions.
     """
     engine = _engine()
     config = engine["config"]
@@ -180,7 +185,7 @@ def investigate(seed: str, depth: int = 3, deep: bool = False) -> dict:
     try:
         config.MAX_PIVOT_DEPTH = max(1, min(int(depth), 10))
         with contextlib.redirect_stdout(sys.stderr):
-            result = engine["run_agent"](seed, deep=deep)
+            result = engine["run_agent"](seed, deep=deep, agentic=agentic)
     except Exception as e:
         return {"seed": seed, "error": f"{type(e).__name__}: {e}"}
     finally:
@@ -198,6 +203,13 @@ def investigate(seed: str, depth: int = 3, deep: bool = False) -> dict:
         "context_note": result.get("context_note", ""),
         "pivots_run": result.get("pivot_count", 0),
         "indicators_investigated": result.get("visited", []),
+        "planner": result.get("planner", "rule"),
+        "pivot_decisions": [
+            {"after_pivot": d.get("after_pivot"), "chosen": d.get("chosen"),
+             "decided_by": d.get("decided_by"),
+             "reason": d.get("fallback") or d.get("reason")}
+            for d in result.get("pivot_decisions") or []
+        ],
         "summary": result.get("summary", ""),
         "findings": result.get("findings", []),
         "source_status": _source_status(result.get("full_results", [])),

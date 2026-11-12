@@ -100,7 +100,7 @@ python main.py
 
 Just run it. The first time, a setup wizard asks for your API keys one at a time, tells you what each is for and whether you actually need it, and saves them for you.
 
-You need VirusTotal, abuse.ch (covers ThreatFox and MalwareBazaar) and OTX. Optional: Anthropic to write the summaries, plus Shodan, Censys and SpiderFoot. Skipping an optional one just means those lookups come back empty; nothing breaks.
+You need VirusTotal, abuse.ch (covers ThreatFox and MalwareBazaar) and OTX. Optional: Anthropic to write the summaries and to steer pivots with `--agentic`, plus Shodan, Censys and SpiderFoot. Skipping an optional one just means those lookups come back empty; nothing breaks.
 
 ---
 
@@ -115,6 +115,7 @@ python main.py --seed "http://host.tld:8080/path"          # URL seed, port and 
 python main.py --seed "example.com" --depth 5 -o out.json  # deeper, saved to JSON
 python main.py --seed "analyst@example.com" --deep         # SpiderFoot for email/username
 python main.py --seed "185.220.101.45" --verbose           # show how the score was derived
+python main.py --seed "example.com" --agentic              # a model picks each next pivot, or stops early
 ```
 
 In the terminal app: `Enter` runs it, `ctrl+p` lists every indicator the investigation turned up so you can jump straight into one, `ctrl+l` clears the screen, `Escape` quits.

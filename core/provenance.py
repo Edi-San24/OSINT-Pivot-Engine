@@ -45,6 +45,9 @@ def stamp(result: dict) -> dict:
         "scorer_version": SCORER_VERSION,
         "evidence_digest": evidence_digest(result.get("full_results") or []),
         "digest_covers": DIGEST_SCOPE,
+        # A model-chosen path is not reproducible, so two runs of one seed can
+        # collect different evidence. Recorded so a comparison knows that.
+        "pivot_planner": result.get("planner", "rule"),
     }
     return result
 

@@ -16,7 +16,7 @@ from core.agent import run_agent
 from core.stix_exporter import STIXExporter
 from config import VERSION
 from core.risk import resolve_risk_level
-from core.render import build_metrics_table, format_summary, get_risk_color
+from core.render import build_metrics_table, build_pivot_path, format_summary, get_risk_color
  
 console = Console()
  
@@ -60,6 +60,10 @@ Examples:
 \b
   Follow the chain further than the default three pivots
     main.py -s suspicious-domain.com --depth 5
+
+\b
+  Let a model choose each next pivot, or stop early, from what the chain found
+    main.py -s suspicious-domain.com --agentic
 
 \b
   Decide which candidates are worth a pivot, spending no VirusTotal quota
@@ -120,6 +124,9 @@ def _screen_seeds(seed: str) -> None:
               help="Maximum indicators to pivot through. Default 3.")
 @click.option("--deep", is_flag=True, default=False,
               help="Add SpiderFoot enrichment. Email and username seeds only, and slow.")
+@click.option("--agentic", is_flag=True, default=False,
+              help="A model picks each next pivot from the candidates found, or stops "
+                   "early. Scoring stays in code; the path can differ between runs.")
 # Output
 @click.option("--output", "-o", default=None, metavar="PATH",
               help="Write the full result, including raw connector output, to JSON.")
@@ -132,7 +139,7 @@ def _screen_seeds(seed: str) -> None:
 # Display
 @click.option("--verbose", "-v", is_flag=True, default=False,
               help="Show how the score and risk level were derived.")
-def run(seed, depth, deep, output, export_stix, screen, verbose):
+def run(seed, depth, deep, agentic, output, export_stix, screen, verbose):
     """
     Autonomous threat intelligence enrichment.
 
@@ -177,7 +184,7 @@ def run(seed, depth, deep, output, export_stix, screen, verbose):
         transient=True,
     ) as progress:
         task = progress.add_task("Running pivot chain...", total=None)
-        result = run_agent(seed, deep=deep)
+        result = run_agent(seed, deep=deep, agentic=agentic)
         progress.update(task, description="Investigation complete.")
  
     risk_level = resolve_risk_level(result)
@@ -186,6 +193,10 @@ def run(seed, depth, deep, output, export_stix, screen, verbose):
     table = build_metrics_table(result, verbose=verbose)
  
     console.print(table)
+
+    pivot_path = build_pivot_path(result)
+    if pivot_path is not None:
+        console.print(pivot_path)
  
     console.print(Panel(
         format_summary(result['summary']),

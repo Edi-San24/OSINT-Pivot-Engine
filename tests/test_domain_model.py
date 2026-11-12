@@ -3130,6 +3130,195 @@ def check_verdict_is_deterministic(scorer: ConfidenceScorer) -> None:
           f"(p={unlisted_url.get('confidence_score')})")
 
 
+def _planner_response(text="", stop_reason="end_turn"):
+    """A stand-in for a Messages API response carrying one answer."""
+    import types
+    blocks = [types.SimpleNamespace(type="thinking", thinking="")]
+    if text:
+        blocks.append(types.SimpleNamespace(type="text", text=text))
+    usage = types.SimpleNamespace(input_tokens=1200, output_tokens=80)
+    return types.SimpleNamespace(content=blocks, stop_reason=stop_reason, usage=usage)
+
+
+def check_planner_choices() -> None:
+    """
+    The planner can pick a shown candidate or stop, and nothing else.
+
+    Every answer it cannot use falls back to the rule's pick, which is the first
+    candidate, and says why. An index past what the model was shown is refused
+    even when the full list is that long, since the model never saw that entry.
+    """
+    import config
+    import core.planner as planner
+
+    print("\n-- the planner picks from the list or stops, and falls back otherwise --")
+
+    candidates = ["9.9.9.9", "cdn-edge.example.net", "a" * 64]
+    state = {"seed": "seed-site.com", "indicator_type": "domain", "pivot_count": 1,
+             "pivot_results": [{"indicator": "seed-site.com", "type": "domain",
+                                "results": {"dns": {"a": ["9.9.9.9"]},
+                                            "crtsh": {"error": "HTTP 502"}}}],
+             "findings": ["one finding"],
+             "candidate_origins": {"9.9.9.9": "address the domain resolves to now, from seed-site.com"}}
+
+    calls = []
+
+    def answer(response=None, exc=None):
+        def fake(system, user):
+            calls.append(user)
+            if exc:
+                raise exc
+            return response
+        return fake
+
+    def decide(fake, cands=candidates):
+        saved = planner._call_model
+        planner._call_model = fake
+        try:
+            return planner.choose_next(state, cands)
+        finally:
+            planner._call_model = saved
+
+    picked = decide(answer(_planner_response('{"decision": "pivot", "index": 1, "reason": "r"}')))
+    check(picked["decided_by"] == "model" and picked["chosen"] == candidates[1]
+          and picked["usage"] == {"input_tokens": 1200, "output_tokens": 80},
+          f"a valid index picks that candidate -> {picked['chosen']}")
+
+    stopped = decide(answer(_planner_response('{"decision": "stop", "index": -1, "reason": "bystanders"}')))
+    check(stopped["action"] == "stop" and stopped["chosen"] is None and stopped["decided_by"] == "model",
+          "stop ends the chain with no candidate")
+
+    cases = {
+        "an index past the list": _planner_response('{"decision": "pivot", "index": 9, "reason": "r"}'),
+        "a boolean index": _planner_response('{"decision": "pivot", "index": true, "reason": "r"}'),
+        "a refusal": _planner_response("", stop_reason="refusal"),
+        "a truncated answer": _planner_response('{"decision": "piv', stop_reason="max_tokens"),
+        "unparseable text": _planner_response("pick the second one"),
+        "no text at all": _planner_response(""),
+    }
+    for label, response in cases.items():
+        result = decide(answer(response))
+        check(result["decided_by"] == "rule" and result["chosen"] == candidates[0]
+              and result["fallback"],
+              f"{label} falls back to the rule's pick -> {(result['fallback'] or '')[:60]}")
+
+    failed = decide(answer(exc=RuntimeError("connection reset")))
+    check(failed["decided_by"] == "rule" and "connection reset" in failed["fallback"],
+          "an exception falls back to the rule and records the error text")
+
+    long_list = [f"10.0.{i // 250}.{i % 250 + 1}" for i in range(planner.MAX_CANDIDATES + 5)]
+    unseen = decide(answer(_planner_response(
+        f'{{"decision": "pivot", "index": {planner.MAX_CANDIDATES + 2}, "reason": "r"}}')), long_list)
+    check(unseen["decided_by"] == "rule",
+          "an index the model was never shown is refused even though the list is that long")
+
+    calls.clear()
+    empty = decide(answer(_planner_response('{"decision": "pivot", "index": 0, "reason": "r"}')), [])
+    check(empty["action"] == "stop" and not calls, "no candidates means no model call")
+
+    calls.clear()
+    decide(answer(_planner_response('{"decision": "pivot", "index": 0, "reason": "r"}')))
+    payload = json.loads(calls[0])
+    shown = payload["candidates"][0]
+    check(shown["found_via"].startswith("address the domain resolves to now")
+          and payload["candidates"][1]["found_via"] == "unrecorded",
+          "each candidate carries how it was reached, or says it was not recorded")
+    check(payload["pivots_done"][0]["sources_failed"] == ["crtsh"]
+          and payload["pivots_done"][0]["sources_with_data"] == ["dns"],
+          "pivots are summarised by which sources answered, without their payloads")
+
+    saved_key, saved_client = config.ANTHROPIC_API_KEY, planner._client
+    config.ANTHROPIC_API_KEY, planner._client = "", None
+    try:
+        keyless = planner.choose_next(state, candidates)
+    finally:
+        config.ANTHROPIC_API_KEY, planner._client = saved_key, saved_client
+    check(keyless["decided_by"] == "rule" and "no Anthropic API key" in keyless["fallback"],
+          "with no API key the rule decides, and says why")
+
+
+def check_planner_in_loop() -> None:
+    """
+    The rule path is unchanged and never calls the model; the model path can
+    redirect or stop the chain; neither can run past the depth cap.
+    """
+    import config
+    import core.agent as agent
+    import core.planner as planner
+
+    print("\n-- the planner steers the loop only when it is on --")
+
+    def state(mode, pivot_count=1):
+        return {"seed": "seed-site.com", "current_seed": "seed-site.com", "indicator_type": "domain",
+                "pivot_results": [{"indicator": "seed-site.com", "type": "domain", "results": {}}],
+                "pivot_queue": ["b" * 64, "9.9.9.9", "other-site.com"],
+                "visited": ["seed-site.com"], "findings": [], "should_continue": True,
+                "pivot_count": pivot_count, "planner": mode, "candidate_origins": {},
+                "pivot_decisions": []}
+
+    calls = []
+
+    def fake(text):
+        def call(system, user):
+            calls.append(user)
+            return _planner_response(text)
+        return call
+
+    saved_call, saved_depth = planner._call_model, config.MAX_PIVOT_DEPTH
+    config.MAX_PIVOT_DEPTH = 3
+    try:
+        planner._call_model = fake('{"decision": "pivot", "index": 1, "reason": "r"}')
+        ruled = agent.analyze_results(state("rule"))
+        rule_calls = len(calls)
+
+        steered = agent.analyze_results(state("model"))
+
+        planner._call_model = fake('{"decision": "stop", "index": -1, "reason": "nothing left"}')
+        halted = agent.analyze_results(state("model"))
+
+        calls.clear()
+        capped = agent.analyze_results(state("model", pivot_count=3))
+        capped_calls = len(calls)
+    finally:
+        planner._call_model, config.MAX_PIVOT_DEPTH = saved_call, saved_depth
+
+    check(rule_calls == 0 and ruled["current_seed"] == "9.9.9.9" and not ruled["pivot_decisions"],
+          f"the rule takes infrastructure first and calls no model -> {ruled['current_seed']}")
+    check(steered["current_seed"] == "other-site.com" and steered["should_continue"]
+          and steered["pivot_decisions"][0]["decided_by"] == "model",
+          f"the model's pick becomes the next pivot -> {steered['current_seed']}")
+    check(not halted["should_continue"] and halted["pivot_decisions"][0]["action"] == "stop",
+          "a stop ends the chain and is recorded")
+    check(capped_calls == 0 and not capped["should_continue"],
+          "at the depth cap the model is not asked")
+
+
+def check_candidate_origins() -> None:
+    """
+    Recording how candidates were reached leaves the candidates themselves
+    unchanged, and keeps the first relationship found.
+    """
+    import core.agent as agent
+
+    print("\n-- candidate origins are recorded without changing the chain --")
+
+    result = {"indicator": "seed-site.com", "type": "domain", "results": {
+        "passivedns": {"records": [{"ip": "9.9.9.9", "record_type": "a",
+                                    "last_seen": 1735689600}]},
+        "dns": {"a": ["9.9.9.9", "149.112.112.112"], "spf": {"ipv4": ["208.67.222.222"]}},
+    }}
+    plain = agent.extract_new_indicators(result, ["seed-site.com"])
+    origins = {}
+    traced = agent.extract_new_indicators(result, ["seed-site.com"], origins=origins)
+
+    check(plain == traced, f"the same candidates in the same order -> {traced}")
+    check(origins.get("9.9.9.9", "").startswith("address the domain resolved to (passive DNS)")
+          and "last seen 2025-01-01" in origins["9.9.9.9"],
+          "the first relationship wins, with its last-seen date")
+    check("SPF" in origins.get("208.67.222.222", ""), "an SPF address says so")
+    check(set(origins) == set(traced), "every candidate has an origin")
+
+
 def main() -> int:
     scorer = ConfidenceScorer()
     entries = {e["indicator"]: e for e in json.load(open(FIXTURE, encoding="utf-8"))}
@@ -3170,6 +3359,9 @@ def main() -> int:
     check_domain_models_load_independently()
     check_unfamiliar_is_a_note()
     check_scoring_survives_malformed_input()
+    check_planner_choices()
+    check_planner_in_loop()
+    check_candidate_origins()
     check_tui_shortcuts_and_picker()
     check_actor_designators()
     check_crowdstrike_designators()
