@@ -3141,6 +3141,149 @@ def check_verdict_is_deterministic(scorer: ConfidenceScorer) -> None:
           f"(p={unlisted_url.get('confidence_score')})")
 
 
+def check_temporal_clock_is_live() -> None:
+    """
+    Recency is measured against the time of scoring, not the time the scorer
+    was built. One scorer serves a whole long-lived process, and frozen_clock
+    has to reach it for any recency check to mean anything.
+    """
+    import datetime as dt
+    import core.agent as agent
+
+    print("\n-- the temporal scorer reads the clock when it scores --")
+
+    scorer = agent.temporal_scorer
+    seen = dt.datetime.fromisoformat("2025-12-31T00:00:00+00:00")
+    early_at, late_at = "2026-01-01T00:00:00+00:00", "2027-06-01T00:00:00+00:00"
+    with frozen_clock(early_at):
+        early = scorer._days_ago(seen)
+    with frozen_clock(late_at):
+        late = scorer._days_ago(seen)
+    expected = (dt.datetime.fromisoformat(late_at) - seen).days
+    check(round(early) == 1 and round(late) == expected,
+          f"a scorer built at import measures from each clock -> {round(early)} and {round(late)} days")
+
+
+def check_malformed_answers_are_contained() -> None:
+    """
+    A source answering in an unexpected shape leaves a visible gap, not a
+    crashed investigation. The scorer has had this guard since it crashed on
+    one; chain extraction, finding extraction and the context layers had not.
+    """
+    import copy
+    import config
+    import core.agent as agent
+    from core.risk import DEFAULT_THRESHOLDS
+
+    print("\n-- a malformed source answer is a visible gap, not a crash --")
+
+    bad = {"indicator": "bad-answer.example.com", "type": "domain",
+           "results": {"passivedns": {"records": [None, 7, "x"]}, "dns": {"a": 5, "spf": "x"},
+                       "virustotal": [1, 2]}}
+    state = {"seed": bad["indicator"], "current_seed": bad["indicator"], "indicator_type": "domain",
+             "pivot_results": [], "pivot_queue": [], "planner": "rule", "candidate_origins": {},
+             "pivot_decisions": [], "visited": [], "findings": [], "should_continue": True,
+             "ml_score": 0.0, "context_score": 0.0, "model_score": 0.0, "band_precision": None,
+             "graph_score": 0.0, "temporal_score": 0.0, "infrastructure_type": "unknown",
+             "context_note": "", "summary": "", "pivot_count": 0, "deep": False,
+             "relevance_level": "none", "insufficient_data": True,
+             "risk_thresholds": list(DEFAULT_THRESHOLDS), "summary_failed": False}
+
+    saved_run, saved_depth = agent.executor.run, config.MAX_PIVOT_DEPTH
+    agent.executor.run = lambda indicator, deep=False, port=None: copy.deepcopy(bad)
+    config.MAX_PIVOT_DEPTH = 3
+    raised = None
+    try:
+        for step in (agent.run_pivot, agent.analyze_results, agent.apply_context):
+            state = step(state)
+    except Exception as e:
+        raised = e
+    finally:
+        agent.executor.run, config.MAX_PIVOT_DEPTH = saved_run, saved_depth
+
+    check(raised is None, f"the investigation completes -> {type(raised).__name__ if raised else 'no exception'}")
+    gaps = [f for f in state["findings"] if f.startswith("VISIBILITY GAP")]
+    for layer in ("chain extraction", "finding extraction", "graph scoring",
+                  "temporal scoring", "infrastructure context"):
+        check(any(f"GAP: {layer} " in g for g in gaps), f"{layer} reports its gap")
+    check(sum(1 for g in gaps if "temporal" in g or "early-warning" in g) == 1,
+          "the seed's temporal failure is reported once, not again by the early-warning scan")
+    check(resolve_risk_level(state) == "UNKNOWN",
+          f"and the verdict says nothing could be read -> {resolve_risk_level(state)}")
+
+
+def check_neighbour_check_states() -> None:
+    """
+    A neighbour the feeds could not be asked about stays protected, is not
+    cached as though it had been answered, and is named as unchecked.
+
+    Failing open is right, since the alternative strips protection from a real
+    business on no evidence. Caching that as an answer kept an address withheld
+    for the life of a long-running process after one failed lookup.
+    """
+    import time
+    import core.stix_exporter as sx
+    import connectors.threatfox as threatfox_module
+    import connectors.urlhaus as urlhaus_module
+
+    print("\n-- an unanswered neighbour check stays protected and is not cached --")
+
+    answers = {"tf": {"error": "timed out"}, "uh": {"error": "timed out"}}
+    calls = []
+    saved = (threatfox_module.ThreatFoxConnector.query_indicator,
+             urlhaus_module.URLhausConnector.query_host, sx.UNANSWERED_RETRY_SECONDS)
+    threatfox_module.ThreatFoxConnector.query_indicator = (
+        lambda self, indicator, kind="domain": (calls.append("tf"), dict(answers["tf"]))[1])
+    urlhaus_module.URLhausConnector.query_host = (
+        lambda self, host: (calls.append("uh"), dict(answers["uh"]))[1])
+    now_ms = int(time.time() * 1000)
+    investigation = {
+        "indicator": "91.92.93.94", "risk_level": "HIGH", "visited": ["91.92.93.94", "77.88.99.111"],
+        "full_results": [
+            {"indicator": "91.92.93.94", "type": "ipv4",
+             "results": {"threatfox": {"found": True, "max_confidence": 90},
+                         "passivedns": {"records": []}}},
+            {"indicator": "77.88.99.111", "type": "ipv4", "results": {"passivedns": {"records": [
+                {"domain": "bakery-one.example", "record_type": "a", "last_seen": now_ms},
+                {"domain": "florist-two.example", "record_type": "a", "last_seen": now_ms}]}}},
+        ],
+    }
+    try:
+        sx._TENANT_VERDICTS.clear()
+        first = sx._is_known_malicious("bakery-one.example")
+        asked = len(calls)
+        again = sx._is_known_malicious("bakery-one.example")
+        reasked = len(calls) - asked
+
+        sx.UNANSWERED_RETRY_SECONDS = 0
+        answers["tf"] = {"found": True}
+        later = sx._is_known_malicious("bakery-one.example")
+
+        answers.update(tf={"found": False}, uh={"found": False})
+        clean = sx._is_known_malicious("florist-two.example")
+        before = len(calls)
+        clean_again = sx._is_known_malicious("florist-two.example")
+        cached = len(calls) == before
+
+        sx._TENANT_VERDICTS.clear()
+        answers.update(tf={"error": "timed out"}, uh={"error": "timed out"})
+        included, excluded = sx.select_indicators([investigation])
+    finally:
+        (threatfox_module.ThreatFoxConnector.query_indicator,
+         urlhaus_module.URLhausConnector.query_host, sx.UNANSWERED_RETRY_SECONDS) = saved
+        sx._TENANT_VERDICTS.clear()
+
+    check(first is None and again is None and reasked == 0,
+          "an unanswered check is None, and is not asked again inside the retry window")
+    check(later is True, "after the window it is asked again, and a listing then counts")
+    check(clean is False and clean_again is False and cached,
+          "a check both feeds answered is False, and stays cached")
+    entry = {e["indicator"]: e for e in excluded}.get("77.88.99.111", {})
+    check("could not be checked" in entry.get("reason", "")
+          and entry.get("unchecked") == ["bakery-one.example", "florist-two.example"],
+          f"the exclusion names the neighbours it could not check -> {entry.get('reason', '')[-80:]}")
+
+
 def _planner_response(text="", stop_reason="end_turn"):
     """A stand-in for a Messages API response carrying one answer."""
     import types
@@ -3327,6 +3470,11 @@ def check_candidate_origins() -> None:
           and "last seen 2025-01-01" in origins["9.9.9.9"],
           "the first relationship wins, with its last-seen date")
     check("SPF" in origins.get("208.67.222.222", ""), "an SPF address says so")
+    odd = {"indicator": "http://odd.example/a", "type": "url", "results": {
+        "url_parts": {"host": 1e308}, "urlhaus": {"payloads": [{"sha256": 0.5}, {"sha256": "c" * 64}]}}}
+    kept = agent.extract_new_indicators(odd, ["http://odd.example/a"])
+    check(kept == ["c" * 64], f"a number where a host or hash belongs is not a candidate -> {kept}")
+
     check(set(origins) == set(traced), "every candidate has an origin")
 
 
@@ -3373,6 +3521,9 @@ def main() -> int:
     check_planner_choices()
     check_planner_in_loop()
     check_candidate_origins()
+    check_temporal_clock_is_live()
+    check_malformed_answers_are_contained()
+    check_neighbour_check_states()
     check_tui_shortcuts_and_picker()
     check_actor_designators()
     check_crowdstrike_designators()

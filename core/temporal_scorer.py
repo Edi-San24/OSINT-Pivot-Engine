@@ -22,8 +22,13 @@ class TemporalScorer:
     Surfaces early warning signals for newly observed or rapidly accelerating threat indicators.
     """
 
-    def __init__(self):
-        self.now = datetime.now(timezone.utc)
+    @property
+    def now(self) -> datetime:
+        """
+        The current time, read on every use. One scorer serves a whole
+        long-lived process, so a clock read once would age every result.
+        """
+        return datetime.now(timezone.utc)
 
     def _parse_timestamp(self, ts) -> datetime | None:
         """

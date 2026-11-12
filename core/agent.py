@@ -337,9 +337,13 @@ def extract_new_indicators(result: dict, visited: list[str],
         if actor not in new_indicators:
             add(actor, "threat actor named in source text")
  
+    # Only text can be an indicator. A source answering a number where a host
+    # or hash belongs would otherwise reach every check downstream.
     seen: set[str] = set()
     clean: list[str] = []
     for ind in new_indicators:
+        if not isinstance(ind, str) or not ind.strip():
+            continue
         if ind not in visited and ind not in seen:
             seen.add(ind)
             clean.append(ind)
@@ -363,6 +367,13 @@ def _seen_date(value) -> str:
     return str(value)[:10]
  
  
+def _layer_gap(indicator: str, layer: str, error: Exception, consequence: str) -> str:
+    """A finding for a layer that could not read a source answer, so the gap shows."""
+    logger.error(f"{layer} failed on {indicator}: {type(error).__name__}: {str(error)[:150]}")
+    return (f"VISIBILITY GAP: {layer} could not read the results for {indicator} "
+            f"({type(error).__name__}: {str(error)[:120]}), so {consequence}.")
+
+
 def run_pivot(state: AgentState) -> AgentState:
     """
     Runs the pivot chain for the current_seed indicator.
@@ -377,9 +388,16 @@ def run_pivot(state: AgentState) -> AgentState:
     state["pivot_count"] += 1
     state["visited"].append(current)
  
-    new_indicators = extract_new_indicators(
-        result, state["visited"], origins=state.get("candidate_origins")
-    )
+    # A source answering in an unexpected shape costs this pivot's leads, not
+    # the investigation.
+    try:
+        new_indicators = extract_new_indicators(
+            result, state["visited"], origins=state.get("candidate_origins")
+        )
+    except Exception as e:
+        new_indicators = []
+        state["findings"].append(_layer_gap(current, "chain extraction", e,
+                                            "the chain does not continue from it"))
     if new_indicators:
         logger.info(f"Discovered {len(new_indicators)} new indicators: {new_indicators}")
         state["pivot_queue"].extend(new_indicators)
@@ -901,11 +919,21 @@ def analyze_results(state: AgentState) -> AgentState:
     logger.info("Recording findings and advancing queue...")
 
     latest = state["pivot_results"][-1]
-    state["findings"].extend(extract_findings(latest))
+    name = latest.get("indicator", "")
+    try:
+        state["findings"].extend(extract_findings(latest))
+    except Exception as e:
+        state["findings"].append(_layer_gap(name, "finding extraction", e,
+                                            "its findings are missing from this report"))
 
     # NER — scan latest pivot result for threat actor mentions and queue them
     origins = state.get("candidate_origins")
-    actors = ner_extractor.extract_threat_actors(latest, state["visited"])
+    try:
+        actors = ner_extractor.extract_threat_actors(latest, state["visited"])
+    except Exception as e:
+        actors = []
+        state["findings"].append(_layer_gap(name, "threat actor extraction", e,
+                                            "no actor named in it is queued"))
     for actor in actors:
         if actor not in state["pivot_queue"] and actor not in state["visited"]:
             state["pivot_queue"].append(actor)
@@ -1035,11 +1063,23 @@ def apply_context(state: AgentState) -> AgentState:
         graph_score = 0.0
         temporal_score = 0.0
     else:
-        graph_scores = graph_scorer.score_all(state["pivot_results"])
-        graph_score = graph_scores.get(state["seed"], 0.0)
+        # A layer that cannot read the results contributes nothing, and the
+        # blending floors keep a missing layer from lowering the score.
+        try:
+            graph_scores = graph_scorer.score_all(state["pivot_results"])
+            graph_score = graph_scores.get(state["seed"], 0.0)
+        except Exception as e:
+            graph_score = 0.0
+            state["findings"].append(_layer_gap(state["seed"], "graph scoring", e,
+                                                "the score has no graph component"))
 
-        temporal_result = temporal_scorer.score(pivot_result)
-        temporal_score = temporal_result.get("temporal_score", 0.0)
+        try:
+            temporal_result = temporal_scorer.score(pivot_result)
+            temporal_score = temporal_result.get("temporal_score", 0.0)
+        except Exception as e:
+            temporal_score = 0.0
+            state["findings"].append(_layer_gap(state["seed"], "temporal scoring", e,
+                                                "the score has no temporal component"))
 
     # Early warning is scanned across every pivot, not just the seed. The signal
     # comes from related-sample recency, which only exists on hash pivots — so a
@@ -1049,7 +1089,15 @@ def apply_context(state: AgentState) -> AgentState:
     for pivot in state["pivot_results"]:
         if pivot.get("type") in NON_INFRASTRUCTURE_TYPES:
             continue
-        if temporal_scorer.score(pivot).get("early_warning"):
+        try:
+            warned = temporal_scorer.score(pivot).get("early_warning")
+        except Exception as e:
+            # The seed's own failure is already reported by temporal scoring.
+            if pivot is not pivot_result:
+                state["findings"].append(_layer_gap(pivot.get("indicator", ""), "early-warning scan",
+                                                    e, "no early warning is read from it"))
+            continue
+        if warned:
             early_warning_indicator = pivot.get("indicator", "")
             break
 
@@ -1073,7 +1121,12 @@ def apply_context(state: AgentState) -> AgentState:
     state["graph_score"] = round(graph_score, 4)
     state["temporal_score"] = round(temporal_score, 4)
 
-    context = detect_infrastructure_type(pivot_result)
+    try:
+        context = detect_infrastructure_type(pivot_result)
+    except Exception as e:
+        context = {"infrastructure_type": "unknown", "confidence_modifier": 0.0}
+        state["findings"].append(_layer_gap(state["seed"], "infrastructure context", e,
+                                            "no context modifier was applied"))
     modifier = context.get("confidence_modifier", 0.0)
     context_score = max(0.0, min(1.0, blended_score + modifier))
  
@@ -1088,7 +1141,11 @@ def apply_context(state: AgentState) -> AgentState:
         )
 
     # Organisational relevance — silent unless an org profile is configured.
-    relevance = assess_relevance(state["pivot_results"], org_profile)
+    try:
+        relevance = assess_relevance(state["pivot_results"], org_profile)
+    except Exception as e:
+        relevance = {"level": "none", "findings": [_layer_gap(
+            state["seed"], "organisational relevance", e, "relevance was not assessed")]}
     state["relevance_level"] = relevance["level"]
     state["findings"].extend(relevance["findings"])
  

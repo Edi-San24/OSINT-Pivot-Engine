@@ -355,11 +355,15 @@ def _is_under(name: str, parents: set[str]) -> bool:
 
 
 
-# Cache so one export does not re-query the same neighbour repeatedly.
-_TENANT_VERDICTS: dict[str, bool] = {}
+# Cache so one export does not re-query the same neighbour repeatedly. An
+# answer is kept for the life of the process; a lookup neither feed answered is
+# kept only briefly, so an outage costs one timeout per neighbour and a later
+# export asks again.
+UNANSWERED_RETRY_SECONDS = 300
+_TENANT_VERDICTS: dict[str, tuple[bool | None, float]] = {}
 
 
-def _is_known_malicious(domain: str) -> bool:
+def _is_known_malicious(domain: str) -> bool | None:
     """
     Whether a co-resolving neighbour is itself listed as malicious.
 
@@ -368,16 +372,18 @@ def _is_known_malicious(domain: str) -> bool:
     with a Mirai distribution host was counted as a bystander and suppressed
     publication of the attacker-owned IP entirely.
 
-    Fails open on purpose. Any error, missing key or unreachable feed returns
-    False, which keeps the neighbour protected. Only positive evidence of
-    maliciousness removes that protection, because the cost of wrongly stripping
-    it is a real business on somebody's blocklist.
+    True when a feed lists it, False when both feeds answered and neither
+    does, None when that could not be established. Fails open on purpose: None
+    keeps the neighbour protected, like False, because the cost of wrongly
+    stripping protection is a real business on somebody's blocklist. It is
+    reported separately so an exclusion it causes does not read as checked.
     """
     key = domain.strip().lower()
-    if key in _TENANT_VERDICTS:
-        return _TENANT_VERDICTS[key]
+    cached = _TENANT_VERDICTS.get(key)
+    if cached and (cached[0] is not None or time.time() - cached[1] < UNANSWERED_RETRY_SECONDS):
+        return cached[0]
 
-    verdict = False
+    verdict = None
     try:
         from connectors.threatfox import ThreatFoxConnector
         from connectors.urlhaus import URLhausConnector
@@ -387,13 +393,20 @@ def _is_known_malicious(domain: str) -> bool:
             verdict = True
         else:
             uh = URLhausConnector().query_host(key)
-            verdict = bool(uh.get("found"))
+            if uh.get("found"):
+                verdict = True
+            elif not tf.get("error") and not uh.get("error"):
+                verdict = False
     except Exception as e:
         logger.warning(f"Could not check neighbour {key}: {str(e)[:80]}")
-        verdict = False
 
-    _TENANT_VERDICTS[key] = verdict
+    _TENANT_VERDICTS[key] = (verdict, time.time())
     return verdict
+
+
+def _unchecked(tenants: list[str]) -> list[str]:
+    """The neighbours whose feed check went unanswered, from the cache just filled."""
+    return [t for t in tenants if (_TENANT_VERDICTS.get(t) or (None, 0))[0] is None]
 
 
 
@@ -467,7 +480,7 @@ def _co_hosted_tenants(pivot: dict, investigated_domains: set[str]) -> list[str]
 
     # Neighbours the feeds already flag are not bystanders, so they do not earn
     # protection and must not suppress publication of the address.
-    protected = [t for t in sorted(set(tenants)) if not _is_known_malicious(t)]
+    protected = [t for t in sorted(set(tenants)) if _is_known_malicious(t) is not True]
     return protected
 
 
@@ -848,13 +861,18 @@ def select_indicators(investigations: list[dict]) -> tuple[list[dict], list[dict
                     })
                     continue
                 if tenants:
+                    unchecked = _unchecked(tenants)
                     excluded.append({
                         "indicator": name,
                         "reason": (
                             f"shared hosting — {len(tenants)} unrelated domain(s) on this "
                             f"address, blocking it would hit bystanders"
+                            + (f"; {len(unchecked)} of them could not be checked against "
+                               f"ThreatFox or URLhaus and are protected by default"
+                               if unchecked else "")
                         ),
                         "co_hosted": tenants[:10],
+                        "unchecked": unchecked[:10],
                     })
                     continue
 
