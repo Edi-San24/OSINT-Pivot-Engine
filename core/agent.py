@@ -18,7 +18,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
  
 import config
 from config import ANTHROPIC_API_KEY
-from core.executor import PivotExecutor, certificate_source
+from core.executor import LICENSED_SOURCES, PivotExecutor, certificate_source
 from core.scorer import ConfidenceScorer
 from core.context import detect_infrastructure_type
 from core.graph_scorer import GraphScorer
@@ -105,6 +105,9 @@ class AgentState(TypedDict):
     candidate_origins: dict
     # One record per choice of next pivot: who made it, what, and why.
     pivot_decisions: list[dict]
+    # Indicators reached only through a licensed source. Kept out of anything a
+    # model is shown, since those terms bar passing their data to one.
+    licensed_only: set
     visited: list[str]
     findings: list[str]
     should_continue: bool
@@ -155,27 +158,31 @@ def is_domain(value: str) -> bool:
     ))
  
  
-# Result blocks the prompt cannot use. DNSDB returns its raw API shape as
-# "rrsets" alongside the normalized "records", which carry the same data, and
-# nothing in the engine reads rrsets.
-PROMPT_DROP_KEYS = {"rrsets"}
+def withheld_from_models(state: dict) -> set:
+    """Indicators reached only through a licensed source, which no model may see."""
+    return set(state.get("licensed_only") or ())
 
 
-def prune_for_prompt(pivot_results: list) -> list:
+def findings_for_model(findings: list, withheld: set) -> list:
+    """Findings, less any that name an indicator a model may not see."""
+    return [f for f in findings if not any(w in f for w in withheld)]
+
+
+def prune_for_prompt(pivot_results: list, withheld: set | None = None) -> list:
     """
-    Drops redundant blocks from the results on their way into the prompt.
+    The results as a model may see them: no licensed source, and no pivot
+    reached only through one, since those terms bar passing their data to a
+    model.
 
-    The prompt copy only. A saved investigation keeps everything, since a
-    reader may want the raw shape even where the summary cannot use it.
+    The prompt copy only. A saved investigation keeps everything.
     """
+    withheld = withheld or set()
     pruned = []
     for pivot in pivot_results:
-        results = {}
-        for name, payload in (pivot.get("results") or {}).items():
-            if isinstance(payload, dict):
-                payload = {k: v for k, v in payload.items()
-                           if k not in PROMPT_DROP_KEYS}
-            results[name] = payload
+        if pivot.get("indicator") in withheld:
+            continue
+        results = {name: payload for name, payload in (pivot.get("results") or {}).items()
+                   if name not in LICENSED_SOURCES}
         pruned.append({**pivot, "results": results})
     return pruned
 
@@ -189,7 +196,8 @@ def safe_json(obj: object, limit: int = 0) -> str:
  
  
 def extract_new_indicators(result: dict, visited: list[str],
-                           origins: dict | None = None) -> list[str]:
+                           origins: dict | None = None,
+                           licensed: set | None = None) -> list[str]:
     """
     Extracts new pivotable indicators from a completed pivot result.
     For domains: extracts IPs from PassiveDNS and subdomains from crt.sh.
@@ -198,35 +206,44 @@ def extract_new_indicators(result: dict, visited: list[str],
 
     When origins is given, records how each new indicator was reached, keyed by
     value, so a planner can weigh candidates by relationship. The first
-    relationship found is kept.
+    relationship found is kept, and only free sources are described, since the
+    labels may be shown to a model.
+
+    When licensed is given, it collects the values reached only through a
+    licensed source, and drops any that a free source has now reached too.
     """
     new_indicators: list[str] = []
     indicator_type = result.get("type", "")
     results = result.get("results", {})
     source = result.get("indicator", "")
+    free_hits: set[str] = set()
+    licensed_hits: set[str] = set()
 
-    def add(value: str, how: str, last_seen=None) -> None:
+    def add(value: str, how: str, last_seen=None, from_licence: bool = False) -> None:
         new_indicators.append(value)
-        if origins is not None and value not in origins:
+        if isinstance(value, str):
+            (licensed_hits if from_licence else free_hits).add(value)
+        if origins is not None and not from_licence and value not in origins:
             seen = _seen_date(last_seen)
             origins[value] = f"{how}, from {source}" + (f", last seen {seen}" if seen else "")
  
     passivedns = results.get("passivedns", {})
-    records = list(passivedns.get("records", []))
+    records = [(record, False) for record in passivedns.get("records", [])]
 
     # DNSDB emits a passivedns-shaped records list, so it chains through the
     # same branches. Merged rather than substituted — the free tier sometimes
     # holds records DNSDB's limit truncated, and dedup below handles overlap.
     dnsdb = results.get("dnsdb", {})
     if isinstance(dnsdb, dict):
-        records.extend(dnsdb.get("records", []) or [])
+        records.extend((record, True) for record in dnsdb.get("records", []) or [])
  
     if indicator_type == "domain":
-        for record in records:
+        for record, from_licence in records:
             ip = record.get("ip", "")
             record_type = record.get("record_type", "")
             if record_type == "a" and ip and is_ipv4(ip) and ip not in visited:
-                add(ip, "address the domain resolved to (passive DNS)", record.get("last_seen"))
+                add(ip, "address the domain resolved to (passive DNS)", record.get("last_seen"),
+                    from_licence)
 
         # Where the domain points now. Chained alongside passive DNS rather
         # than instead of it: a domain with no history still resolves, so
@@ -248,12 +265,13 @@ def extract_new_indicators(result: dict, visited: list[str],
         # crt.sh, the legacy key older saved investigations used, or the
         # licensed fallback when crt.sh did not answer.
         certs = certificate_source(results)
+        from_licence = certs.get("licensed") is True
         for cert in certs.get("certificates", []):
             names = cert.get("names", "")
             for name in names.replace("\n", ",").split(","):
                 name = name.strip().lstrip("*.")
                 if name and is_domain(name) and name not in visited:
-                    add(name, "name on a certificate issued for the domain")
+                    add(name, "name on a certificate issued for the domain", from_licence=from_licence)
  
     elif indicator_type == "url":
         # The host gets its own pivot, and any payload URLhaus recorded is a
@@ -267,13 +285,13 @@ def extract_new_indicators(result: dict, visited: list[str],
                 add(sha256, "payload the URL served (URLhaus)")
 
     elif indicator_type == "ipv4":
-        for record in records:
+        for record, from_licence in records:
             # Either key: passivedns.query_ip emits "domain" and DNSDB emits
             # both, so reading one alone would chain no co-tenants at all.
             value = record.get("domain") or record.get("ip") or ""
             if value and is_domain(value) and value not in visited:
                 add(value, "domain that resolved to the address (passive DNS)",
-                    record.get("last_seen"))
+                    record.get("last_seen"), from_licence)
  
     elif indicator_type == "hash":
         bazaar_related = results.get("malwarebazaar_related", {})
@@ -347,6 +365,10 @@ def extract_new_indicators(result: dict, visited: list[str],
         if ind not in visited and ind not in seen:
             seen.add(ind)
             clean.append(ind)
+
+    if licensed is not None:
+        licensed.difference_update(free_hits)
+        licensed.update(licensed_hits - free_hits)
  
     return clean
 
@@ -392,7 +414,8 @@ def run_pivot(state: AgentState) -> AgentState:
     # the investigation.
     try:
         new_indicators = extract_new_indicators(
-            result, state["visited"], origins=state.get("candidate_origins")
+            result, state["visited"], origins=state.get("candidate_origins"),
+            licensed=state.get("licensed_only"),
         )
     except Exception as e:
         new_indicators = []
@@ -1167,8 +1190,9 @@ def summarize(state: AgentState) -> AgentState:
     """
     logger.info("Agent generating final summary...")
 
-    findings_str = safe_json(state["findings"])
-    results_str = safe_json(prune_for_prompt(state["pivot_results"]))
+    withheld = withheld_from_models(state)
+    findings_str = safe_json(findings_for_model(state["findings"], withheld))
+    results_str = safe_json(prune_for_prompt(state["pivot_results"], withheld))
 
     # Deterministic, and computed from the same fields run_agent will use, so the
     # summary cannot state a level the result contradicts.
@@ -1222,7 +1246,9 @@ def summarize(state: AgentState) -> AgentState:
     user_message = (
         "Write an investigation summary for:\n\n"
         f"Seed Indicator: {state['seed']}\n"
-        f"Indicators investigated: {state['visited']}\n"
+        f"Indicators investigated: {[v for v in state['visited'] if v not in withheld]}\n"
+        + (f"Pivots left out of this prompt under a data licence: {len(withheld)}\n"
+           if withheld else "") +
         f"Pivots run: {state['pivot_count']}\n"
         f"ML Score: {state['ml_score']}\n"
         f"Context Score: {state['context_score']}\n"
@@ -1366,6 +1392,7 @@ def run_agent(seed: str, deep: bool = False, agentic: bool = False) -> dict:
         "planner": "model" if agentic else "rule",
         "candidate_origins": {},
         "pivot_decisions": [],
+        "licensed_only": set(),
         "visited": [],
         "findings": [],
         "should_continue": True,
@@ -1413,6 +1440,7 @@ def run_agent(seed: str, deep: bool = False, agentic: bool = False) -> dict:
         "pivot_count": final_state["pivot_count"],
         "planner": final_state.get("planner", "rule"),
         "pivot_decisions": final_state.get("pivot_decisions") or [],
+        "licensed_only": sorted(final_state.get("licensed_only") or []),
         "ml_score": final_state["ml_score"],
         "context_score": final_state["context_score"],
         "model_score": final_state.get("model_score", 0.0),

@@ -104,7 +104,7 @@ def _harvest(pivot_results: list) -> dict:
             except ValueError:
                 domains.add(value.lower())
 
-        certs = certificate_source(results)
+        certs = certificate_source(results, licensed=False)
         for cert in certs.get("certificates", []):
             for name in (cert.get("names", "") or "").replace("\n", ",").split(","):
                 name = name.strip().lstrip("*.").lower()

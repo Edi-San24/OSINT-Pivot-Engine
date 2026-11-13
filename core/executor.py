@@ -147,18 +147,26 @@ def _run_parallel(tasks: dict, timeout: int = None) -> dict:
     return results
  
  
-def certificate_source(results: dict) -> dict:
+# Result keys holding licensed data. Their terms bar passing it to generative
+# AI, training on it, and transferring it to third parties, so nothing built
+# from these may reach a model or leave the machine.
+LICENSED_SOURCES = frozenset({"domaintools", "dnsdb", "ssl_info"})
+
+
+def certificate_source(results: dict, licensed: bool = True) -> dict:
     """
     Whichever source actually returned certificates, preferring the checkable one.
 
     crt.sh first, because a reader can verify it without a subscription, then
-    the legacy key older saved investigations used, then the licensed fallback.
+    the legacy key older saved investigations used, then the licensed fallback,
+    unless licensed is False.
 
     The choice is made on content rather than presence. A failed crt.sh lookup
     still returns a dict, so an `or` chain selects it and then finds nothing
     underneath, which is how a fallback ends up never being read.
     """
-    for key in ("crtsh", "censys", "ssl_info"):
+    keys = ("crtsh", "censys", "ssl_info") if licensed else ("crtsh", "censys")
+    for key in keys:
         block = results.get(key) or {}
         if block.get("certificates"):
             return block

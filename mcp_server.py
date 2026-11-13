@@ -192,6 +192,8 @@ def investigate(seed: str, depth: int = 3, deep: bool = False,
         config.MAX_PIVOT_DEPTH = original_depth
 
     _INVESTIGATIONS[_cache_key(seed)] = result
+    # Reached only through a licensed source, so never shown to the model client.
+    withheld = set(result.get("licensed_only") or [])
 
     return {
         "seed": seed,
@@ -202,16 +204,17 @@ def investigate(seed: str, depth: int = 3, deep: bool = False,
         "infrastructure_type": result.get("infrastructure_type", "unknown"),
         "context_note": result.get("context_note", ""),
         "pivots_run": result.get("pivot_count", 0),
-        "indicators_investigated": result.get("visited", []),
+        "indicators_investigated": [v for v in result.get("visited", []) if v not in withheld],
         "planner": result.get("planner", "rule"),
         "pivot_decisions": [
-            {"after_pivot": d.get("after_pivot"), "chosen": d.get("chosen"),
+            {"after_pivot": d.get("after_pivot"),
+             "chosen": "withheld under a data licence" if d.get("chosen") in withheld else d.get("chosen"),
              "decided_by": d.get("decided_by"),
              "reason": d.get("fallback") or d.get("reason")}
             for d in result.get("pivot_decisions") or []
         ],
         "summary": result.get("summary", ""),
-        "findings": result.get("findings", []),
+        "findings": [f for f in result.get("findings", []) if not any(w in f for w in withheld)],
         "source_status": _source_status(result.get("full_results", [])),
         "note": (
             "Raw connector payloads omitted. "
@@ -236,7 +239,12 @@ def get_raw_pivot_data(seed: str, source: str = "", indicator: str = "") -> dict
             passivedns, urlhaus, otx, mitre, malwarebazaar,
             malwarebazaar_related, ahmia, or spiderfoot. Strongly recommended.
         indicator: Restrict to one pivoted indicator instead of the whole chain.
+
+    Licensed sources are never returned, nor any pivot reached only through
+    one: their terms bar passing that data to a model.
     """
+    from core.executor import LICENSED_SOURCES
+
     result = _cached(seed)
     if result is None:
         return {
@@ -244,15 +252,25 @@ def get_raw_pivot_data(seed: str, source: str = "", indicator: str = "") -> dict
             "available": _cached_seeds(),
             "hint": "Call investigate(seed) first.",
         }
+    if source in LICENSED_SOURCES:
+        return {"error": f"'{source}' is a licensed source, and its terms bar passing its "
+                         "data to a model, so it is not returned here."}
 
-    pivots = result.get("full_results", [])
+    withheld = set(result.get("licensed_only") or [])
+    pivots = [
+        {**p, "results": {k: v for k, v in (p.get("results") or {}).items()
+                          if k not in LICENSED_SOURCES}}
+        for p in result.get("full_results", [])
+        if p.get("indicator") not in withheld
+    ]
     if indicator:
         wanted = indicator.strip().lower()
         pivots = [p for p in pivots if (p.get("indicator") or "").lower() == wanted]
         if not pivots:
             return {
-                "error": f"'{indicator}' was not pivoted in this investigation.",
-                "available": result.get("visited", []),
+                "error": f"'{indicator}' was not pivoted in this investigation, or was "
+                         "reached only through a licensed source.",
+                "available": [v for v in result.get("visited", []) if v not in withheld],
             }
 
     if source:

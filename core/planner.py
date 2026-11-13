@@ -8,6 +8,7 @@ import anthropic
 
 import config
 from core.detector import detect_type
+from core.executor import LICENSED_SOURCES
 
 logger = logging.getLogger(__name__)
 
@@ -89,10 +90,17 @@ def _call_model(system: str, user: str):
     )
 
 
-def _pivot_digest(pivot: dict) -> dict:
-    """Which sources answered for one completed pivot, without their payloads."""
+def _pivot_digest(pivot: dict, withheld: set) -> dict:
+    """
+    Which free sources answered for one completed pivot, without their
+    payloads. A pivot reached only through a licensed source is not named.
+    """
+    if pivot.get("indicator") in withheld:
+        return {"indicator": "withheld under a data licence", "type": pivot.get("type", "")}
     answered, failed = [], []
     for name, value in (pivot.get("results") or {}).items():
+        if name in LICENSED_SOURCES:
+            continue
         if isinstance(value, dict) and value.get("error"):
             failed.append(name)
         elif value:
@@ -114,23 +122,32 @@ def _candidate_type(value: str) -> str:
     return (detected or {}).get("type", "unknown")
 
 
+def model_visible(state: dict, candidates: list[str]) -> list[str]:
+    """The candidates a model may be shown: none reached only through a licensed source."""
+    withheld = set(state.get("licensed_only") or ())
+    return [c for c in candidates if c not in withheld]
+
+
 def build_request(state: dict, candidates: list[str]) -> tuple[str, list[str]]:
     """The user message for one decision, and the candidates it offers."""
-    shown = candidates[:MAX_CANDIDATES]
+    withheld = set(state.get("licensed_only") or ())
+    visible = model_visible(state, candidates)
+    shown = visible[:MAX_CANDIDATES]
     origins = state.get("candidate_origins") or {}
-    findings = [f[:MAX_FINDING_CHARS] for f in (state.get("findings") or [])[-MAX_FINDINGS:]]
+    findings = [f[:MAX_FINDING_CHARS] for f in (state.get("findings") or [])
+                if not any(w in f for w in withheld)][-MAX_FINDINGS:]
     payload = {
         "seed": state.get("seed", ""),
         "seed_type": state.get("indicator_type", ""),
         "pivots_remaining": max(0, config.MAX_PIVOT_DEPTH - state.get("pivot_count", 0)),
-        "pivots_done": [_pivot_digest(p) for p in state.get("pivot_results") or []],
+        "pivots_done": [_pivot_digest(p, withheld) for p in state.get("pivot_results") or []],
         "findings": findings,
         "candidates": [
             {"index": i, "value": value, "type": _candidate_type(value),
              "found_via": origins.get(value, "unrecorded")}
             for i, value in enumerate(shown)
         ],
-        "candidates_not_shown": len(candidates) - len(shown),
+        "candidates_not_shown": len(visible) - len(shown),
     }
     return json.dumps(payload, ensure_ascii=False, indent=1), shown
 
@@ -170,6 +187,9 @@ def choose_next(state: dict, candidates: list[str]) -> dict:
         record.update({"decided_by": "rule", "action": "stop", "chosen": None,
                        "reason": "no candidates remain"})
         return record
+    if not model_visible(state, candidates):
+        return rule("every candidate was reached only through a licensed source, "
+                    "which a model may not be shown")
 
     user, shown = build_request(state, candidates)
     try:

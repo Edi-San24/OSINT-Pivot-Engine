@@ -45,15 +45,6 @@ SAMPLE_VOLUME_FULL_MARKS = 50
 # nothing else needs touching.
 DOMAIN_MODEL_TAG = "v2c"
 
-# A second domain model trained on licensed facts, absent from a public clone
-# along with the connectors that feed it. Guarded the same way executor.py
-# guards those connectors, so the free path is unchanged when it is missing.
-try:
-    from core import licensed_model
-except ImportError:
-    licensed_model = None
-
-
 # Order of the levels, for choosing the stronger of two readings.
 LEVEL_RANK = {"UNKNOWN": -1, "LOW": 0, "MEDIUM": 1, "HIGH": 2}
 
@@ -184,10 +175,6 @@ class ConfidenceScorer:
                 f"{confidence_score:.4f} on infrastructure alone. "
                 + evidence.get("note", "")
             )
-            # Attached here too, not only on the path below. A feed listing
-            # floors the model most often on a compromised legitimate site,
-            # which is exactly the case worth seeing a second opinion on.
-            evidence.update(self._licensed_opinion(pivot_result))
             evidence["unfamiliar"] = unfamiliar
             return evidence
 
@@ -208,7 +195,6 @@ class ConfidenceScorer:
             "model": f"domain_{DOMAIN_MODEL_TAG}",
             **fields,
             "features_used": features,
-            **self._licensed_opinion(pivot_result),
         }
 
     def _unfamiliar(self, matrix) -> bool | None:
@@ -225,23 +211,6 @@ class ConfidenceScorer:
             logger.warning(f"Familiarity check failed: {str(e)[:120]}")
             return None
 
-    def _licensed_opinion(self, pivot_result: dict) -> dict:
-        """
-        A second domain score from licensed facts, where one is installed.
-
-        Reported beside the free score rather than instead of it. The published
-        score stays the one a clone can reproduce, and the two disagreeing is
-        itself worth seeing: they read different evidence, so a split means one
-        of them is looking at something the other cannot.
-        """
-        if licensed_model is None or not licensed_model.available():
-            return {}
-        results = pivot_result.get("results") or {}
-        iris = results.get("domaintools") or {}
-        verdict = licensed_model.score(pivot_result.get("indicator", ""), iris)
-        if verdict.get("skipped"):
-            return {}
-        return {"licensed": verdict}
  
     # Relevant, deduplicated pulses earning full marks when ATT&CK has nothing.
     # Modest on purpose: a genuinely new actor may have only a handful on day

@@ -3141,6 +3141,125 @@ def check_verdict_is_deterministic(scorer: ConfidenceScorer) -> None:
           f"(p={unlisted_url.get('confidence_score')})")
 
 
+def check_licensed_data_stays_out_of_models() -> None:
+    """
+    Licensed data reaches no model: not the summary, not the planner, not an
+    MCP client. Their terms bar passing it to generative AI, so a candidate
+    reached only through a licensed source is withheld along with everything
+    that names it, while the same candidate reached freely is not.
+    """
+    import types
+    import core.agent as agent
+    import core.planner as planner
+    import mcp_server
+    from core.executor import LICENSED_SOURCES
+    from core.risk import DEFAULT_THRESHOLDS
+
+    print("\n-- licensed data reaches no model --")
+
+    marker = "LICENSED-ONLY-MARKER"
+    seed = {"indicator": "seed-site.com", "type": "domain", "results": {
+        "passivedns": {"records": [{"ip": "9.9.9.9", "record_type": "a"},
+                                   {"ip": "149.112.112.112", "record_type": "a"}]},
+        "dnsdb": {"records": [{"ip": "208.67.222.222", "record_type": "a", "note": marker},
+                              {"ip": "149.112.112.112", "record_type": "a"}]},
+        "domaintools": {"risk_score": 99, "registrant": marker},
+        "ssl_info": {"licensed": True, "note": marker,
+                     "certificates": [{"names": "licensed-cert-name.com"}]},
+        "virustotal": {"malicious_votes": 1},
+    }}
+    origins, licensed = {}, set()
+    found = agent.extract_new_indicators(seed, ["seed-site.com"], origins=origins, licensed=licensed)
+    check(licensed == {"208.67.222.222", "licensed-cert-name.com"},
+          f"reached only through DNSDB or Iris certificates -> {sorted(licensed)}")
+    check("149.112.112.112" not in licensed and "149.112.112.112" in origins,
+          "a candidate a free source also reached is not withheld")
+    check(not (set(origins) & licensed), "no licensed-only candidate carries a label a model would read")
+    check(set(found) >= licensed, "the chain itself may still pivot on them")
+
+    withheld_pivot = {"indicator": "208.67.222.222", "type": "ipv4",
+                      "results": {"virustotal": {"malicious_votes": 0}}}
+    findings = ["208.67.222.222: geolocated somewhere.", "seed-site.com: one free finding."]
+
+    captured = []
+
+    class Model:
+        def invoke(self, messages):
+            captured.append("\n".join(str(getattr(m, "content", m)) for m in messages))
+            return types.SimpleNamespace(content="THREAT LEVEL: LOW\nDISSENT: none",
+                                         response_metadata={"stop_reason": "end_turn"})
+
+    state = {"seed": "seed-site.com", "current_seed": "seed-site.com", "indicator_type": "domain",
+             "pivot_results": [seed, withheld_pivot], "pivot_queue": [],
+             "visited": ["seed-site.com", "208.67.222.222"], "findings": list(findings),
+             "should_continue": False, "ml_score": 0.1, "context_score": 0.1,
+             "infrastructure_type": "unknown", "context_note": "", "summary": "", "pivot_count": 2,
+             "deep": False, "relevance_level": "none", "insufficient_data": False,
+             "risk_thresholds": list(DEFAULT_THRESHOLDS), "summary_failed": False,
+             "licensed_only": set(licensed)}
+    saved_llm = agent.llm
+    agent.llm = Model()
+    try:
+        agent.summarize(state)
+    finally:
+        agent.llm = saved_llm
+    prompt = captured[0] if captured else ""
+    check(bool(captured) and marker not in prompt
+          and not any(f'"{k}"' in prompt for k in LICENSED_SOURCES),
+          "the summary prompt carries no licensed block")
+    check("208.67.222.222" not in prompt and "licensed-cert-name.com" not in prompt,
+          "nor any indicator reached only through one, or a finding that names it")
+    check("seed-site.com: one free finding." in prompt, "while free findings still reach it")
+
+    pstate = {"seed": "seed-site.com", "indicator_type": "domain", "pivot_count": 1,
+              "pivot_results": [seed, withheld_pivot], "findings": list(findings),
+              "candidate_origins": origins, "licensed_only": set(licensed)}
+    user, shown = planner.build_request(pstate, ["208.67.222.222", "9.9.9.9", "licensed-cert-name.com"])
+    check(shown == ["9.9.9.9"] and marker not in user and "208.67.222.222" not in user
+          and "licensed-cert-name.com" not in user
+          and not any(f'"{k}"' in user for k in LICENSED_SOURCES),
+          f"the planner sees only free candidates, pivots and findings -> {shown}")
+    calls = []
+    saved_call = planner._call_model
+    planner._call_model = lambda system, user_text: calls.append(user_text)
+    try:
+        decision = planner.choose_next(pstate, ["208.67.222.222"])
+    finally:
+        planner._call_model = saved_call
+    check(not calls and decision["decided_by"] == "rule",
+          "with only licensed-only candidates the model is not asked")
+
+    key = mcp_server._cache_key("seed-site.com")
+    mcp_server._INVESTIGATIONS[key] = {"indicator": "seed-site.com",
+                                       "visited": ["seed-site.com", "208.67.222.222"],
+                                       "licensed_only": sorted(licensed),
+                                       "full_results": [seed, withheld_pivot]}
+    try:
+        refused = mcp_server.get_raw_pivot_data("seed-site.com", source="dnsdb")
+        everything = json.dumps(mcp_server.get_raw_pivot_data("seed-site.com"), default=str)
+        hidden = mcp_server.get_raw_pivot_data("seed-site.com", indicator="208.67.222.222")
+    finally:
+        mcp_server._INVESTIGATIONS.pop(key, None)
+    check("error" in refused and marker not in json.dumps(refused),
+          "the MCP raw tool refuses a licensed source")
+    check(marker not in everything and "208.67.222.222" not in everything,
+          "and leaves licensed blocks and licensed-only pivots out of everything else")
+    check("error" in hidden, "a licensed-only pivot cannot be fetched by name")
+
+
+def check_no_model_on_licensed_data() -> None:
+    """No model is trained on or applied to licensed data. Their terms bar it."""
+    import core.scorer as scorer_module
+
+    print("\n-- no model reads licensed data --")
+    check(not hasattr(scorer_module, "licensed_model"),
+          "the scorer loads no model trained on licensed data")
+    pivot = {"indicator": "seed-site.com", "type": "domain",
+             "results": {"domaintools": {"risk_score": 99}, "dns": {"a": ["9.9.9.9"]}}}
+    result = ConfidenceScorer().score_any(pivot)
+    check("licensed" not in result, "and no score carries an opinion from one")
+
+
 def check_temporal_clock_is_live() -> None:
     """
     Recency is measured against the time of scoring, not the time the scorer
@@ -3524,6 +3643,8 @@ def main() -> int:
     check_temporal_clock_is_live()
     check_malformed_answers_are_contained()
     check_neighbour_check_states()
+    check_licensed_data_stays_out_of_models()
+    check_no_model_on_licensed_data()
     check_tui_shortcuts_and_picker()
     check_actor_designators()
     check_crowdstrike_designators()
