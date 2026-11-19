@@ -291,6 +291,117 @@ def check_registrable_domains() -> None:
           f"and still walks a hostname up to the registrable name -> {walk}")
 
 
+def check_virustotal_resolutions() -> None:
+    """
+    VirusTotal's passive DNS chains like the free source, fills in when the free
+    source is empty, and reports a failure as a failure, never as no records.
+    """
+    print("\n-- VirusTotal passive DNS chains, and its silence is not read as an answer --")
+    import time as _time
+    import requests as _requests
+    import connectors.virustotal as vt_module
+    from connectors.virustotal import VirusTotalConnector
+    from core.agent import extract_new_indicators, extract_findings
+    from core.executor import PivotExecutor
+    import core.stix_exporter as sx
+
+    recent = int(_time.time()) - 86400
+
+    class Answer:
+        def __init__(self, status, body):
+            self.status_code, self._body = status, body
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise _requests.exceptions.HTTPError(f"{self.status_code} Client Error")
+
+        def json(self):
+            return self._body
+
+    class NoWait:
+        def wait(self):
+            return 0.0
+
+    body = {"meta": {"count": 35}, "data": [
+        {"attributes": {"host_name": "older.example", "ip_address": "9.9.9.9", "date": recent - 900}},
+        {"attributes": {"host_name": "newer.example", "ip_address": "9.9.9.9", "date": recent}},
+        {"attributes": {"host_name": "v6.example", "ip_address": "2001:db8::1", "date": recent - 50}},
+        {"attributes": {"ip_address": "9.9.9.9"}},
+    ]}
+    saved_get, saved_limiter = vt_module.requests.get, vt_module._LIMITER
+    vt_module._LIMITER = NoWait()
+    connector = VirusTotalConnector()
+    try:
+        vt_module.requests.get = lambda *a, **k: Answer(200, body)
+        found = connector.query_resolutions("9.9.9.9", "ipv4")
+        vt_module.requests.get = lambda *a, **k: Answer(404, {})
+        unknown = connector.query_resolutions("never-seen.example", "domain")
+        vt_module.requests.get = lambda *a, **k: Answer(429, {})
+        refused = connector.query_resolutions("9.9.9.9", "ipv4")
+        vt_module.requests.get = lambda *a, **k: Answer(200, ["not", "a", "dict"])
+        odd = connector.query_resolutions("9.9.9.9", "ipv4")
+    finally:
+        vt_module.requests.get, vt_module._LIMITER = saved_get, saved_limiter
+
+    names = [r["domain"] for r in found.get("records", [])]
+    check(names == ["newer.example", "v6.example", "older.example"],
+          f"records arrive newest first, unnamed ones dropped -> {names}")
+    check(found.get("record_count") == 35 and found.get("found") is True,
+          f"the total VirusTotal holds is kept beside the capped list -> {found.get('record_count')}")
+    check(found["records"][1]["record_type"] == "aaaa",
+          "an IPv6 address is typed so the A-record chain skips it")
+    check(unknown.get("found") is False and "error" not in unknown,
+          f"a name VirusTotal never saw is an answer, not a failure -> {unknown}")
+    check(refused.get("quota_exceeded") is True and not refused.get("records"),
+          f"a refusal is flagged and carries no records -> {refused}")
+    check("error" in odd, f"an answer in an unexpected shape is an error -> {odd.get('error')}")
+
+    origins, licensed = {}, set()
+    ip_result = {"indicator": "9.9.9.9", "type": "ipv4", "results": {"virustotal_resolutions": found}}
+    chained = extract_new_indicators(ip_result, ["9.9.9.9"], origins=origins, licensed=licensed)
+    check("newer.example" in chained and not licensed,
+          f"an address pivot chains VirusTotal's co-tenants as free candidates -> {chained}")
+    check("VirusTotal passive DNS" in origins.get("newer.example", ""),
+          f"and labels where they came from -> {origins.get('newer.example')}")
+    gone = {"indicator": "gone.example", "type": "domain", "results": {
+        "virustotal_resolutions": {"found": True, "record_count": 1, "records": [
+            {"domain": "gone.example", "ip": "9.9.9.9", "record_type": "a", "last_seen": recent}]}}}
+    origins = {}
+    chained = extract_new_indicators(gone, ["gone.example"], origins=origins)
+    check("9.9.9.9" in chained,
+          f"a domain that no longer resolves still chains to its old address -> {chained}")
+    findings = extract_findings(ip_result)
+    check(any("VirusTotal passive DNS holds 35" in f for f in findings),
+          "the finding states how many resolutions VirusTotal holds")
+
+    calls = []
+
+    class StubVT:
+        def query_resolutions(self, indicator, itype):
+            calls.append(indicator)
+            return {"found": True, "records": []}
+
+    executor = PivotExecutor.__new__(PivotExecutor)
+    executor.vt = StubVT()
+    with_free = {"passivedns": {"records": [{"ip": "9.9.9.9", "record_type": "a"}]}}
+    executor._resolution_fallback("busy.example", with_free)
+    check(not calls and "virustotal_resolutions" not in with_free,
+          "a domain the free source already covers spends no VirusTotal quota")
+    for empty in ({"passivedns": {"records": []}}, {"passivedns": {"error": "timed out"}}):
+        executor._resolution_fallback("quiet.example", empty)
+    check(calls == ["quiet.example", "quiet.example"],
+          "an empty or failed free source falls back to VirusTotal")
+
+    saved_known = sx._is_known_malicious
+    sx._is_known_malicious = lambda name: False
+    try:
+        tenants = sx._co_hosted_tenants(ip_result, set())
+    finally:
+        sx._is_known_malicious = saved_known
+    check(tenants is not None and "newer.example" in tenants,
+          f"bystander protection counts the co-tenants VirusTotal knows -> {tenants}")
+
+
 def check_publication_gate(entries: dict) -> None:
     """
     A domain the chain discovered needs a source other than our own model
@@ -3681,6 +3792,7 @@ def main() -> int:
     check_actor_designators()
     check_crowdstrike_designators()
     check_registrable_domains()
+    check_virustotal_resolutions()
     check_malware_families()
     check_publication_gate(entries)
 

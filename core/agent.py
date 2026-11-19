@@ -228,21 +228,28 @@ def extract_new_indicators(result: dict, visited: list[str],
             origins[value] = f"{how}, from {source}" + (f", last seen {seen}" if seen else "")
  
     passivedns = results.get("passivedns", {})
-    records = [(record, False) for record in passivedns.get("records", [])]
+    records = [(record, False, "passive DNS") for record in passivedns.get("records", [])]
+
+    # VirusTotal's passive DNS, in the same record shape. Free, so it labels
+    # its candidates like any other free source.
+    resolutions = results.get("virustotal_resolutions") or {}
+    if isinstance(resolutions, dict):
+        records.extend((record, False, "VirusTotal passive DNS")
+                       for record in resolutions.get("records", []) or [])
 
     # DNSDB emits a passivedns-shaped records list, so it chains through the
     # same branches. Merged rather than substituted — the free tier sometimes
     # holds records DNSDB's limit truncated, and dedup below handles overlap.
     dnsdb = results.get("dnsdb", {})
     if isinstance(dnsdb, dict):
-        records.extend((record, True) for record in dnsdb.get("records", []) or [])
- 
+        records.extend((record, True, "passive DNS") for record in dnsdb.get("records", []) or [])
+
     if indicator_type == "domain":
-        for record, from_licence in records:
+        for record, from_licence, label in records:
             ip = record.get("ip", "")
             record_type = record.get("record_type", "")
             if record_type == "a" and ip and is_ipv4(ip) and ip not in visited:
-                add(ip, "address the domain resolved to (passive DNS)", record.get("last_seen"),
+                add(ip, f"address the domain resolved to ({label})", record.get("last_seen"),
                     from_licence)
 
         # Where the domain points now. Chained alongside passive DNS rather
@@ -285,12 +292,12 @@ def extract_new_indicators(result: dict, visited: list[str],
                 add(sha256, "payload the URL served (URLhaus)")
 
     elif indicator_type == "ipv4":
-        for record, from_licence in records:
+        for record, from_licence, label in records:
             # Either key: passivedns.query_ip emits "domain" and DNSDB emits
             # both, so reading one alone would chain no co-tenants at all.
             value = record.get("domain") or record.get("ip") or ""
             if value and is_domain(value) and value not in visited:
-                add(value, "domain that resolved to the address (passive DNS)",
+                add(value, f"domain that resolved to the address ({label})",
                     record.get("last_seen"), from_licence)
  
     elif indicator_type == "hash":
@@ -602,6 +609,12 @@ def extract_findings(result: dict) -> list[str]:
     record_count = results.get("passivedns", {}).get("record_count", 0)
     if record_count:
         findings.append(f"{indicator}: {record_count} historical DNS records.")
+    resolutions = results.get("virustotal_resolutions") or {}
+    if isinstance(resolutions, dict) and resolutions.get("found"):
+        newest = _seen_date((resolutions.get("records") or [{}])[0].get("last_seen"))
+        findings.append(f"{indicator}: VirusTotal passive DNS holds "
+                        f"{resolutions.get('record_count', 0)} resolution(s)"
+                        + (f", newest {newest}." if newest else "."))
 
     # URLhaus — active delivery infrastructure.
     #

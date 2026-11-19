@@ -87,6 +87,63 @@ class VirusTotalConnector:
         except requests.exceptions.RequestException as e:
             return quota_error(e, domain, "virustotal")
 
+    def query_resolutions(self, indicator: str, itype: str, limit: int = 40) -> dict:
+        """
+        Passive DNS as VirusTotal recorded it, in the passivedns connector's
+        record shape so every consumer reads both without special cases.
+
+        An address returns the names that resolved to it, a domain the
+        addresses it resolved to. VirusTotal stamps only the latest sighting,
+        so first_seen is None. A name VirusTotal has never seen is an answer
+        (found False); a refusal or failure is an error, never an empty list.
+        """
+        path = "ip_addresses" if itype == "ipv4" else "domains"
+        url = f"{self.BASE_URL}/{path}/{indicator}/resolutions"
+        source = "virustotal_resolutions"
+
+        try:
+            _LIMITER.wait()
+            response = requests.get(url, headers=self.headers, params={"limit": limit},
+                                    timeout=REQUEST_TIMEOUT)
+            if response.status_code == 404:
+                return {"indicator": indicator, "type": itype, "source": source,
+                        "found": False, "record_count": 0, "records": []}
+            response.raise_for_status()
+            body = response.json()
+        except requests.exceptions.RequestException as e:
+            return quota_error(e, indicator, source)
+        except ValueError as e:
+            return {"error": f"unreadable answer: {e}", "indicator": indicator, "source": source}
+
+        try:
+            records = []
+            for item in body.get("data") or []:
+                attributes = item.get("attributes") or {}
+                host, address = attributes.get("host_name"), attributes.get("ip_address")
+                if not isinstance(host, str) or not isinstance(address, str) or not host or not address:
+                    continue
+                stamp = attributes.get("date")
+                records.append({
+                    "domain": host,
+                    "ip": address,
+                    "record_type": "aaaa" if ":" in address else "a",
+                    "first_seen": None,
+                    "last_seen": stamp if isinstance(stamp, (int, float)) else None,
+                })
+            records.sort(key=lambda r: r["last_seen"] or 0, reverse=True)
+            count = (body.get("meta") or {}).get("count", len(records))
+        except (AttributeError, TypeError) as e:
+            return {"error": f"unexpected answer shape: {e}", "indicator": indicator, "source": source}
+
+        return {
+            "indicator": indicator,
+            "type": itype,
+            "source": source,
+            "found": bool(records),
+            "record_count": count,
+            "records": records[:MAX_RESULTS_PER_SOURCE],
+        }
+
     def query_hash(self, hash: str) -> dict:
         """
         Queries VT for a given file hash.

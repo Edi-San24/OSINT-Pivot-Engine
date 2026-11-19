@@ -459,6 +459,7 @@ def _co_hosted_tenants(pivot: dict, investigated_domains: set[str]) -> list[str]
     """
     results = pivot.get("results", {})
     records = list((results.get("passivedns") or {}).get("records") or [])
+    records.extend((results.get("virustotal_resolutions") or {}).get("records") or [])
     records.extend((results.get("dnsdb") or {}).get("records") or [])
     if not records:
         return None

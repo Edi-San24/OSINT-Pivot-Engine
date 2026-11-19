@@ -263,6 +263,11 @@ class PivotExecutor:
         results = _run_parallel(tasks)
         _record_seed_port(results, port)
         self._expand_family(results)
+        # The free passive DNS sees few of the names on an address, and its
+        # co-tenants are what an address pivot chains on. Run after the batch:
+        # it shares VirusTotal's rate limiter with the lookup above, and two
+        # paced waits inside one batch outlast the batch ceiling.
+        results["virustotal_resolutions"] = self.vt.query_resolutions(ip, "ipv4")
 
         return {"indicator": ip, "type": "ipv4", "results": results}
  
@@ -302,8 +307,21 @@ class PivotExecutor:
         _record_seed_port(results, port)
         self._expand_family(results)
         self._certificate_fallback(results)
+        self._resolution_fallback(domain, results)
 
         return {"indicator": domain, "type": "domain", "results": results}
+
+    def _resolution_fallback(self, domain: str, results: dict) -> None:
+        """
+        VirusTotal's passive DNS for a domain the free source has no records of.
+
+        Only then, since each call spends rate-limited quota. A domain that no
+        longer resolves and has no free history is the case it exists for: its
+        old addresses are the only way the chain can continue.
+        """
+        if (results.get("passivedns") or {}).get("records"):
+            return
+        results["virustotal_resolutions"] = self.vt.query_resolutions(domain, "domain")
 
     def _certificate_fallback(self, results: dict) -> None:
         """
