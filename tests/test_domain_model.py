@@ -259,6 +259,38 @@ def check_crowdstrike_designators() -> None:
           f"no known designator is stoplisted as zoology -> {collisions or 'none'}")
 
 
+def check_registrable_domains() -> None:
+    """
+    Registries and Iris index registrable names, so cutting a hostname to the
+    wrong one asks a question that comes back "not found". Too short asks about
+    a public suffix itself; too long asks about a hostname no registry holds.
+    """
+    print("\n-- hostnames reduce to the name a registry holds --")
+    from core.detector import registrable_domain
+    from connectors.rdap import RDAPConnector
+
+    expected = {
+        "app.example.com": "example.com",
+        "a.b.example.co.za": "example.co.za",
+        "team.business.in": "team.business.in",
+        "x.web.05meet.am.in": "05meet.am.in",
+        "b.c.kawasaki.jp": "b.c.kawasaki.jp",
+        "project.vercel.app": "vercel.app",
+        "Example.COM.": "example.com",
+        "co.uk": "co.uk",
+    }
+    for name, want in expected.items():
+        got = registrable_domain(name)
+        check(got == want, f"{name} -> {got} (want {want})")
+
+    walk = RDAPConnector._candidates("team.business.in")
+    check(walk == ["team.business.in"],
+          f"RDAP never asks a registry about its own suffix -> {walk}")
+    walk = RDAPConnector._candidates("a.b.example.co.za")
+    check(walk == ["a.b.example.co.za", "b.example.co.za", "example.co.za"],
+          f"and still walks a hostname up to the registrable name -> {walk}")
+
+
 def check_publication_gate(entries: dict) -> None:
     """
     A domain the chain discovered needs a source other than our own model
@@ -3648,6 +3680,7 @@ def main() -> int:
     check_tui_shortcuts_and_picker()
     check_actor_designators()
     check_crowdstrike_designators()
+    check_registrable_domains()
     check_malware_families()
     check_publication_gate(entries)
 

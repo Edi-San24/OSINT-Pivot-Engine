@@ -4,6 +4,8 @@
 import logging
 import requests
 
+from core.detector import registrable_domain
+
 logger = logging.getLogger(__name__)
 
 # IANA's bootstrap registry maps each TLD to its authoritative RDAP server.
@@ -12,22 +14,6 @@ logger = logging.getLogger(__name__)
 BOOTSTRAP_URL = "https://data.iana.org/rdap/dns.json"
 
 REQUEST_TIMEOUT = 10
-
-# Second-level public suffixes, so stripping toward the registrable domain stops
-# before it asks a registry about itself. Not a full public suffix list — the
-# common ccTLD structures, which is what shows up in practice.
-PUBLIC_SUFFIXES_2LD = {
-    "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "net.uk",
-    "co.za", "org.za", "net.za", "web.za",
-    "com.au", "net.au", "org.au", "edu.au", "gov.au",
-    "co.nz", "net.nz", "org.nz",
-    "co.jp", "ne.jp", "or.jp", "ac.jp",
-    "com.br", "net.br", "org.br",
-    "co.in", "net.in", "org.in", "gov.in",
-    "com.cn", "net.cn", "org.cn",
-    "com.mx", "com.ar", "com.tr", "com.sg", "com.tw", "com.hk",
-    "co.kr", "or.kr", "co.il", "org.il", "co.th", "com.my", "com.ph",
-}
 
 # Dates RDAP reports as events, mapped to the field names the WHOIS connector
 # already returns so either source is a drop-in for the other.
@@ -153,16 +139,15 @@ class RDAPConnector:
         then explained the phantom discrepancy as possible "deliberate
         obfuscation".
         """
-        labels = domain.lower().strip(".").split(".")
-        candidates = []
-        for i in range(len(labels) - 1):
-            candidate = ".".join(labels[i:])
-            candidates.append(candidate)
-            # Stop once the next strip would leave a public suffix.
-            remainder = ".".join(labels[i + 1:])
-            if len(labels) - (i + 1) < 2 or remainder in PUBLIC_SUFFIXES_2LD:
-                break
-        return candidates
+        name = domain.lower().strip(".")
+        registrable = registrable_domain(name)
+        if name != registrable and not name.endswith("." + registrable):
+            return [name]
+        labels = name.split(".")
+        # Stops at the registrable domain, so a registry is never asked about
+        # one of its own suffixes.
+        depth = len(registrable.split("."))
+        return [".".join(labels[i:]) for i in range(len(labels) - depth + 1)]
 
     def query_domain(self, domain: str) -> dict:
         """

@@ -1,5 +1,8 @@
 # core/detector.py
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 KNOWN_MALWARE_FAMILIES = {
     # Top RATs 2025-2026
@@ -208,9 +211,19 @@ _WHITESPACE = re.compile(r"\s")
 # form is matched here and split to the host.
 HOST_PORT = re.compile(r"^(?P<host>[^\s:/]+):(?P<port>\d{1,5})$")
 
-# Second-level public suffixes, so stripping a hostname to its registrable
-# domain stops before it returns a public suffix. Not a full PSL — the common
-# ccTLD structures, which is what shows up in practice.
+# The Public Suffix List's ICANN section, from the package's bundled snapshot,
+# so no lookup touches the network. Registries index names registered under
+# ICANN suffixes; a hosting platform's private suffix is not a registry, so
+# foo.vercel.app still resolves to vercel.app.
+try:
+    from publicsuffixlist import PublicSuffixList
+    _PSL = PublicSuffixList(only_icann=True)
+except ImportError:
+    _PSL = None
+    logger.warning("publicsuffixlist is not installed; registrable domains fall back "
+                   "to a short suffix list and will be wrong under other suffixes.")
+
+# Used only without the package: the common second-level ccTLD suffixes.
 PUBLIC_SUFFIXES_2LD = {
     "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "net.uk",
     "co.za", "org.za", "net.za", "web.za",
@@ -232,11 +245,17 @@ def registrable_domain(name: str) -> str:
 
     Registries and domain-level products index registrable names, not
     hostnames, so querying the full name returns nothing and reads as "not
-    found" rather than "wrong question".
+    found" rather than "wrong question". Cutting too far is the same error the
+    other way: x.business.in cut to business.in asks about a public suffix.
+
+    A name that is itself a public suffix comes back unchanged.
     """
-    labels = name.lower().strip(".").split(".")
+    name = name.lower().strip(".")
+    labels = name.split(".")
     if len(labels) <= 2:
-        return ".".join(labels)
+        return name
+    if _PSL is not None:
+        return _PSL.privatesuffix(name) or name
     if ".".join(labels[-2:]) in PUBLIC_SUFFIXES_2LD:
         return ".".join(labels[-3:])
     return ".".join(labels[-2:])

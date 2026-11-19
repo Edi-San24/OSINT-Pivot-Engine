@@ -29,6 +29,7 @@ networkx==3.6.1
 # Connectors
 requests==2.34.2
 python-whois==0.9.6
+publicsuffixlist==1.0.2.20260726
 mitreattack-python==6.1.0
 playwright==1.61.0
 
