@@ -27,7 +27,7 @@ class URLhausConnector:
     Connector for the URLhaus API.
     Surfaces malicious URLs, delivery infrastructure, and
     hosting details for malware families and seed indicators.
-    Supports host and malware family lookups.
+    Supports host, payload and malware family lookups.
     """
 
     def __init__(self):
@@ -143,6 +143,59 @@ class URLhausConnector:
         except Exception as e:
             logger.error(f"URLhaus host query failed for '{host}': {str(e)[:100]}")
             return {"error": str(e), "indicator": host, "source": "urlhaus"}
+
+    def query_payload(self, file_hash: str) -> dict:
+        """
+        Queries URLhaus for the URLs that served one file, by MD5 or SHA256.
+        Answers about this file only; query_malware_family is the family-wide view.
+        """
+        field = {32: "md5_hash", 64: "sha256_hash"}.get(len(file_hash))
+        if field is None:
+            return {"indicator": file_hash, "type": "hash", "source": "urlhaus",
+                    "skipped": True, "reason": "URLhaus looks up files by MD5 or SHA256 only."}
+        try:
+            response = requests.post(
+                f"{BASE_URL}/payload/",
+                data={field: file_hash},
+                headers=self.headers,
+                timeout=15
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # "no_results" is an answer; any other status is a failure, not an absence.
+            status = data.get("query_status")
+            if status == "no_results":
+                return {"indicator": file_hash, "type": "hash", "source": "urlhaus",
+                        "found": False, "reason": status}
+            if status != "ok":
+                return {"error": f"URLhaus answered {status}", "indicator": file_hash,
+                        "source": "urlhaus"}
+
+            all_urls = data.get("urls") or []
+            urls = _online_first(all_urls)[:URL_PAYLOAD_LIMIT]
+
+            return {
+                "indicator": file_hash,
+                "type": "hash",
+                "source": "urlhaus",
+                "found": True,
+                "url_count": data.get("url_count") or len(all_urls),
+                "online_count": sum(1 for u in all_urls if u.get("url_status") == "online"),
+                "urls": [
+                    {
+                        "url": u.get("url", "unknown"),
+                        "status": u.get("url_status", "unknown"),
+                        "file_name": u.get("filename") or "unknown",
+                        "date_added": u.get("firstseen", "unknown"),
+                    }
+                    for u in urls
+                ]
+            }
+
+        except Exception as e:
+            logger.error(f"URLhaus payload query failed for '{file_hash}': {str(e)[:100]}")
+            return {"error": str(e), "indicator": file_hash, "source": "urlhaus"}
 
     def query_malware_family(self, family: str) -> dict:
         """

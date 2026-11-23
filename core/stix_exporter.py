@@ -485,6 +485,15 @@ def _co_hosted_tenants(pivot: dict, investigated_domains: set[str]) -> list[str]
     return protected
 
 
+def _urlhaus_listing(results: dict) -> dict:
+    """
+    URLhaus's answer about the indicator itself. A family-wide lookup filed
+    under the same key describes other files, so it is never this listing.
+    """
+    urlhaus = results.get("urlhaus") or {}
+    return {} if urlhaus.get("type") == "malware_family" else urlhaus
+
+
 def _feed_listed(pivot: dict) -> str:
     """
     Whether a feed lists this indicator itself, named so the audit can say so.
@@ -502,7 +511,7 @@ def _feed_listed(pivot: dict) -> str:
         detail = f" at confidence {confidence}" if confidence is not None else ""
         return f"ThreatFox{detail}{f' ({families})' if families else ''}"
 
-    urlhaus = results.get("urlhaus") or {}
+    urlhaus = _urlhaus_listing(results)
     if urlhaus.get("found"):
         return "URLhaus"
 
@@ -572,7 +581,7 @@ def _evidence_age_days(pivot: dict) -> float | None:
     results = pivot.get("results") or {}
     stamps: list[float] = []
 
-    urlhaus = results.get("urlhaus") or {}
+    urlhaus = _urlhaus_listing(results)
     if urlhaus.get("found"):
         for entry in urlhaus.get("urls") or []:
             if (entry.get("status") or "").lower() == "online":
@@ -650,7 +659,7 @@ def _corroboration(pivot: dict) -> str:
     if threatfox.get("found"):
         return f"ThreatFox at confidence {threatfox.get('max_confidence')}"
 
-    if (results.get("urlhaus") or {}).get("found"):
+    if _urlhaus_listing(results).get("found"):
         return "URLhaus"
 
     votes = (results.get("virustotal") or {}).get("malicious_votes") or 0

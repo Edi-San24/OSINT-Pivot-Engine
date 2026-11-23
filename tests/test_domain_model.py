@@ -402,6 +402,122 @@ def check_virustotal_resolutions() -> None:
           f"bystander protection counts the co-tenants VirusTotal knows -> {tenants}")
 
 
+def check_urlhaus_payload_and_family() -> None:
+    """
+    A hash pivot asks URLhaus about the file itself. The family's URLs are kept
+    under their own key, labelled as the family's, and never read as the file
+    being listed.
+    """
+    print("\n-- URLhaus answers about the file; the family's URLs stay the family's --")
+    import requests as _requests
+    import connectors.urlhaus as uh_module
+    from connectors.urlhaus import URLhausConnector
+    from core.agent import extract_new_indicators, extract_findings
+    from core.executor import PivotExecutor
+    import core.stix_exporter as sx
+
+    sha256, sha1 = "a" * 64, "b" * 40
+
+    class Answer:
+        def __init__(self, body):
+            self._body = body
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._body
+
+    listed = {"query_status": "ok", "url_count": "2", "urls": [
+        {"url": "http://old.example/a.exe", "url_status": "offline", "filename": "a.exe",
+         "firstseen": "2026-01-01 10:00:00 UTC"},
+        {"url": "http://live.example/b.exe", "url_status": "online", "filename": "b.exe",
+         "firstseen": "2026-11-01 10:00:00 UTC"},
+    ]}
+    sent = []
+    saved_post = uh_module.requests.post
+    connector = URLhausConnector()
+    try:
+        def answer(body):
+            def post(url, data=None, **kwargs):
+                sent.append((url, dict(data or {})))
+                return Answer(body)
+            return post
+        uh_module.requests.post = answer(listed)
+        found = connector.query_payload(sha256)
+        uh_module.requests.post = answer({"query_status": "no_results"})
+        absent = connector.query_payload("c" * 32)
+        uh_module.requests.post = answer({"query_status": "unknown_auth_key"})
+        refused = connector.query_payload(sha256)
+        before = len(sent)
+        skipped = connector.query_payload(sha1)
+    finally:
+        uh_module.requests.post = saved_post
+
+    check(sent[0][0].endswith("/payload/") and sent[0][1] == {"sha256_hash": sha256}
+          and sent[1][1] == {"md5_hash": "c" * 32},
+          f"the payload lookup sends the hash under its own field -> {sent[:2]}")
+    check(found.get("found") is True and found["urls"][0]["url"] == "http://live.example/b.exe"
+          and found["urls"][1]["date_added"] == "2026-01-01 10:00:00 UTC",
+          f"URLs come back online first, dated by when URLhaus first saw them -> {found.get('urls')}")
+    check(absent.get("found") is False and "error" not in absent,
+          f"a file URLhaus never saw is an answer -> {absent}")
+    check("error" in refused and not refused.get("found"),
+          f"any other status is a failure, never an absence -> {refused}")
+    check(skipped.get("skipped") is True and "found" not in skipped and len(sent) == before,
+          f"a SHA1 is not sent, and says why -> {skipped}")
+
+    family = {"indicator": "FamilyX", "type": "malware_family", "source": "urlhaus",
+              "found": True, "url_count": 12, "online_count": 3,
+              "urls": [{"url": "http://kin.example/y.exe", "status": "online"},
+                       {"url": "http://own.example/z.exe", "status": "offline"}]}
+
+    class Stub:
+        def __init__(self, **answers):
+            for name, value in answers.items():
+                setattr(self, name, lambda *a, _v=value, **k: _v)
+
+    executor = PivotExecutor.__new__(PivotExecutor)
+    executor.vt = Stub(query_hash={"malicious_votes": 5, "harmless_votes": 0})
+    executor.bazaar = Stub(query_hash={"found": True, "malware_family": "FamilyX"},
+                           query_tag={"found": False})
+    executor.otx = Stub(query_indicator={"found": False})
+    executor.urlhaus = Stub(query_payload={"found": False, "type": "hash", "reason": "no_results"},
+                            query_malware_family=family)
+    executor.mitre = Stub(query_software={"found": False})
+    pivot = executor.pivot_hash(sha256)["results"]
+    check((pivot.get("urlhaus") or {}).get("type") == "hash"
+          and (pivot.get("urlhaus_tag") or {}).get("type") == "malware_family",
+          f"the file's own lookup is 'urlhaus', the family's is 'urlhaus_tag' -> "
+          f"{(pivot.get('urlhaus') or {}).get('type')}, {(pivot.get('urlhaus_tag') or {}).get('type')}")
+
+    findings = extract_findings({"indicator": sha256, "type": "hash", "results": pivot})
+    check(not any("URLhaus lists" in f for f in findings),
+          f"the family's URLs are not reported as the file's listing -> {findings}")
+    check(any("URLhaus tags 12 URL(s) with FamilyX (3 online), none recorded serving this file"
+              in f for f in findings),
+          "the finding names them as the family's, and says the file itself had none")
+
+    both = {"indicator": sha256, "type": "hash", "results": {
+        "urlhaus": {"found": True, "type": "hash", "urls": [{"url": "http://own.example/x.exe"}]},
+        "urlhaus_tag": family}}
+    origins = {}
+    chained = extract_new_indicators(both, [sha256], origins=origins)
+    check(chained == ["own.example", "kin.example"],
+          f"hosts that served the file come before the family's, once each -> {chained}")
+    check(origins.get("own.example", "").startswith("host that served the sample (URLhaus)")
+          and "not this file" in origins.get("kin.example", ""),
+          f"each is labelled for what it is -> {origins}")
+
+    old_shape = {"results": {"urlhaus": family}}
+    own_shape = {"results": {"urlhaus": found}}
+    check(sx._feed_listed(old_shape) == "" and sx._corroboration(old_shape) == ""
+          and sx._evidence_age_days(old_shape) is None,
+          "a family lookup under 'urlhaus' is no listing, corroboration or currency in a pulse")
+    check(sx._feed_listed(own_shape) == "URLhaus" and sx._evidence_age_days(own_shape) == 0.0,
+          "the file's own live listing still counts")
+
+
 def check_publication_gate(entries: dict) -> None:
     """
     A domain the chain discovered needs a source other than our own model
@@ -3793,6 +3909,7 @@ def main() -> int:
     check_crowdstrike_designators()
     check_registrable_domains()
     check_virustotal_resolutions()
+    check_urlhaus_payload_and_family()
     check_malware_families()
     check_publication_gate(entries)
 

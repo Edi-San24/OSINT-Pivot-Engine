@@ -468,7 +468,7 @@ class PivotExecutor:
 
     def pivot_hash(self, hash_val: str, deep: bool = False) -> dict:
         """
-        Queries VirusTotal and MalwareBazaar for a file hash indicator.
+        Queries VirusTotal, MalwareBazaar and URLhaus for a file hash indicator.
         Chains into related samples via malware family tag clustering.
         MITRE enrichment runs after VT returns a malware family name.
         """
@@ -480,6 +480,7 @@ class PivotExecutor:
             hash_tasks = {
                 "virustotal": lambda: self.vt.query_hash(hash_val),
                 "malwarebazaar": lambda: self.bazaar.query_hash(hash_val),
+                "urlhaus": lambda: self.urlhaus.query_payload(hash_val),
             }
             hash_results = _run_parallel(hash_tasks)
             results.update(hash_results)
@@ -497,10 +498,11 @@ class PivotExecutor:
                 logger.info(f"Querying MalwareBazaar for related samples by tag: {malware_tag}")
                 results["malwarebazaar_related"] = self.bazaar.query_tag(malware_tag)
 
-            # URLhaus enrichment using Bazaar malware family tag
+            # The family's URLs describe other files, so they stay apart from
+            # "urlhaus", which means this file itself is listed.
             if malware_tag and bazaar_result.get("found"):
-                logger.info(f"Querying URLhaus for delivery URLs: {malware_tag}")
-                results["urlhaus"] = self.urlhaus.query_malware_family(malware_tag)
+                logger.info(f"Querying URLhaus for the family's URLs: {malware_tag}")
+                results["urlhaus_tag"] = self.urlhaus.query_malware_family(malware_tag)
  
             # MITRE enrichment using VT malware family name
             malware_name = vt_result.get("malware_family") if isinstance(vt_result, dict) else None

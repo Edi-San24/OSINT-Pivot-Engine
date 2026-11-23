@@ -311,13 +311,17 @@ def extract_new_indicators(result: dict, visited: list[str],
         # The hosts URLhaus recorded serving this sample. A hash pivot that
         # reaches the staging infrastructure and does not follow it leaves the
         # more durable half of the campaign unexamined, since a sample rotates
-        # far faster than the host distributing it.
-        for entry in (results.get("urlhaus") or {}).get("urls") or []:
-            host = urlparse(entry.get("url") or "").hostname or ""
-            if not host or host in visited:
-                continue
-            if is_ipv4(host) or is_domain(host):
-                add(host, "host that served the sample (URLhaus)")
+        # far faster than the host distributing it. Hosts serving other files
+        # of the family are a looser tie, offered after them.
+        for key, label in (("urlhaus", "host that served the sample (URLhaus)"),
+                           ("urlhaus_tag", "host that served the same family, "
+                                           "not this file (URLhaus tag)")):
+            for entry in (results.get(key) or {}).get("urls") or []:
+                host = urlparse(entry.get("url") or "").hostname or ""
+                if not host or host in visited:
+                    continue
+                if is_ipv4(host) or is_domain(host):
+                    add(host, label)
 
     elif indicator_type == "cve":
         # Hosts a feed tags with the CVE, so the pivot continues from the
@@ -742,6 +746,19 @@ def extract_findings(result: dict) -> list[str]:
         findings.append(
             f"{indicator}: {related.get('sample_count', 0)} related samples share "
             "this malware family tag."
+        )
+
+    # The family's URLs, said to be the family's so they never read as this
+    # file's own listing. CVE pivots report their tag lookups above.
+    family_urls = results.get("urlhaus_tag") or {}
+    if family_urls.get("found") and result.get("type") == "hash":
+        own = results.get("urlhaus") or {}
+        whose = ("none recorded serving this file" if own.get("found") is False
+                 and "error" not in own else "served the family, not necessarily this file")
+        findings.append(
+            f"{indicator}: URLhaus tags {family_urls.get('url_count')} URL(s) with "
+            f"{family_urls.get('indicator') or 'the family'} "
+            f"({family_urls.get('online_count', 0)} online), {whose}."
         )
 
     # Samples abuse.ch attributes to the actor by name, which is a stronger
